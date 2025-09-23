@@ -20,7 +20,7 @@ class ImageToVideoEffects:
         Args:
             input_pattern: 输入图片的模式，如 'input%d.jpg' 或 'output_%03d.jpg' 或 'images/*.jpg'
             output_dir: 输出目录路径
-            fps: 帧率，默认为25
+            fps: 帧率，默认为25（输出帧率）
             duration: 每个效果视频的时长（秒）
             output_size: 输出分辨率，例如 '1280x720'
         """
@@ -30,19 +30,19 @@ class ImageToVideoEffects:
             
         # 设置输入模式和帧率
         self.input_pattern = input_pattern
-        self.fps = int(fps)
+        self.output_fps = int(fps)
+        self.fps = self.output_fps  # 兼容旧字段名
         self.duration = float(duration)
         self.output_size = str(output_size)
-        self.total_frames = max(1, int(self.fps * self.duration))
+        self.total_frames = max(1, int(self.output_fps * self.duration))
         # 解析输出尺寸
         try:
             self.w, self.h = map(int, self.output_size.lower().split('x'))
         except Exception:
             raise ValueError(f"非法的输出分辨率: {self.output_size}，应为例如 1280x720")
         
-        # 检查是否有符合模式的图片文件
-        if not self._check_input_files():
-            print(f"警告: 未找到符合模式 '{input_pattern}' 的图片文件")
+        # 输入文件统计
+        self._detect_input_set()
         
         # 设置输出目录
         if output_dir:
@@ -58,170 +58,142 @@ class ImageToVideoEffects:
             {
                 "name": "fade_in_out",
                 "description": "淡入淡出效果",
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        f"fps={self.fps}",
-                        f"fade=in:0:{max(1, int(self.fps*0.6))}",
-                        f"fade=out:{max(0, self.total_frames - int(self.fps*0.6))}:{max(1, int(self.fps*0.6))}"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    f"fps={self.output_fps}",
+                    f"fade=in:0:{max(1, int(self.output_fps*0.6))}",
+                    f"fade=out:{max(0, self.total_frames - int(self.output_fps*0.6))}:{max(1, int(self.output_fps*0.6))}"
+                ])
             },
             {
                 "name": "slide_horizontal",
                 "description": "水平滑动效果",
                 # 通过zoompan实现平移（z=1，仅移动x）
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        # 使用zoompan将每帧渲染一次，并移动x（t为秒）
-                        # 注意：zoompan需要指定输出大小s
-                        f"zoompan=z=1:x=min(max(0, t*{int(self.w//max(1,self.duration))}),(iw-w)):y=0:d=1:s={self.output_size}:fps={self.fps}"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    # 线性平移到最右侧
+                    f"zoompan=z=1:x=(iw-w)*t/{max(1.0,self.duration)}:y=0:d=1:s={self.output_size}:fps={self.output_fps}"
+                ])
             },
             {
                 "name": "zoompan_slow",
                 "description": "缓慢缩放效果 (Ken Burns)",
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        f"zoompan=z='min(1.0+0.15*t,1.5)':x='iw/2-(iw*zoom/2)':y='ih/2-(ih*zoom/2)':d=1:s={self.output_size}:fps={self.fps}"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    # 线性放大
+                    f"zoompan=z=1.0+0.15*t:x='iw/2-(iw*zoom/2)':y='ih/2-(ih*zoom/2)':d=1:s={self.output_size}:fps={self.output_fps}"
+                ])
             },
             {
                 "name": "black_white",
                 "description": "黑白效果",
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        f"fps={self.fps}",
-                        "hue=s=0"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    f"fps={self.output_fps}",
+                    "hue=s=0"
+                ])
             },
             {
                 "name": "sepia",
                 "description": "复古（棕褐色）效果",
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        f"fps={self.fps}",
-                        # 使用颜色通道混合实现复古色调
-                        "colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    f"fps={self.output_fps}",
+                    # 使用颜色通道混合实现复古色调
+                    "colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131"
+                ])
             },
             {
                 "name": "gaussian_blur",
                 "description": "高斯模糊效果",
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        f"fps={self.fps}",
-                        "gblur=sigma=5"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    f"fps={self.output_fps}",
+                    "gblur=sigma=5"
+                ])
             },
             {
                 "name": "text_watermark",
                 "description": "添加文字水印",
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        f"fps={self.fps}",
-                        # 如果系统找不到默认字体，建议在命令行传入 fontfile
-                        "drawtext=text='My Slideshow':x=10:y=10:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.35:boxborderw=10"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    f"fps={self.output_fps}",
+                    # 如果系统找不到默认字体，建议在命令行传入 fontfile
+                    "drawtext=text='My Slideshow':x=10:y=10:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.35:boxborderw=10"
+                ])
             },
             {
                 "name": "dynamic_text",
                 "description": "动态文字效果",
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        f"fps={self.fps}",
-                        "drawtext=text='Frame %{n}':x=w-tw-20:y=20:fontsize=28:fontcolor=red:box=1:boxcolor=black@0.35:boxborderw=10"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    f"fps={self.output_fps}",
+                    "drawtext=text='Frame %{n}':x=w-tw-20:y=20:fontsize=28:fontcolor=red:box=1:boxcolor=black@0.35:boxborderw=10"
+                ])
             },
             {
                 "name": "slow_motion",
                 "description": "慢动作效果",
                 # 使用setpts拉长时基，并用trim统一时长
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        f"fps={self.fps}",
-                        "setpts=2.0*PTS",
-                        f"trim=duration={self.duration}"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    f"fps={self.output_fps}",
+                    "setpts=2.0*PTS"
+                ], add_trim=True)
             },
             {
                 "name": "fast_forward",
                 "description": "快进效果",
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        f"fps={self.fps}",
-                        "setpts=0.5*PTS",
-                        f"trim=duration={self.duration}"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    f"fps={self.output_fps}",
+                    "setpts=0.5*PTS"
+                ], add_trim=True)
             },
             {
                 "name": "pixelize",
                 "description": "马赛克像素化效果",
                 # 使用两次scale+neighbor实现像素化（pixelize滤镜在很多构建中不存在）
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        f"fps={self.fps}",
-                        "scale=iw/20:ih/20:flags=neighbor",
-                        "scale=iw*20:ih*20:flags=neighbor"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    f"fps={self.output_fps}",
+                    "scale=iw/20:ih/20:flags=neighbor",
+                    "scale=iw*20:ih*20:flags=neighbor"
+                ])
             },
             {
                 "name": "mirror",
                 "description": "镜像效果",
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        f"fps={self.fps}",
-                        "split[a][b];[b]hflip[c];[a][c]hstack"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    f"fps={self.output_fps}",
+                    "split[a][b];[b]hflip[c];[a][c]hstack"
+                ])
             },
             {
                 "name": "comprehensive",
                 "description": "高级综合特效 (缩放+淡入淡出+文字)",
-                "filter": self._vf_chain(
-                    [
-                        f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        self._pad_center(),
-                        # 温和的Ken Burns
-                        f"zoompan=z='min(1.0+0.1*t,1.2)':x='iw/2-(iw*zoom/2)':y='ih/2-(ih*zoom/2)':d=1:s={self.output_size}:fps={self.fps}",
-                        f"fade=in:0:{max(1, int(self.fps*0.5))}",
-                        f"fade=out:{max(0, self.total_frames - int(self.fps*0.5))}:{max(1, int(self.fps*0.5))}",
-                        "drawtext=text='My Photo':x=(w-text_w)/2:y=h-text_h-40:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=20"
-                    ]
-                )
+                "filter": self._vf_with_duration([
+                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
+                    self._pad_center(),
+                    # 线性Ken Burns
+                    f"zoompan=z=1.0+0.1*t:x='iw/2-(iw*zoom/2)':y='ih/2-(ih*zoom/2)':d=1:s={self.output_size}:fps={self.output_fps}",
+                    f"fade=in:0:{max(1, int(self.output_fps*0.5))}",
+                    f"fade=out:{max(0, self.total_frames - int(self.output_fps*0.5))}:{max(1, int(self.output_fps*0.5))}",
+                    "drawtext=text='My Photo':x=(w-text_w)/2:y=h-text_h-40:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=20"
+                ])
             }
         ]
         
@@ -235,6 +207,27 @@ class ImageToVideoEffects:
             return True
         except (subprocess.SubprocessError, FileNotFoundError):
             return False
+    
+    def _detect_input_set(self):
+        """检测输入是序列还是单图，并统计数量，计算输入帧率。"""
+        import glob, re
+        self.is_sequence = False
+        pattern = self.input_pattern
+        # 统计匹配文件
+        glob_pattern = pattern
+        if "%" in pattern:
+            glob_pattern = re.sub(r"%0?\d*d", "*", pattern)
+        matching_files = sorted(glob.glob(glob_pattern))
+        self.num_input_frames = len(matching_files) if matching_files else 0
+        # 判断是否为序列
+        if any(ch in pattern for ch in ["*", "?", "["]) or "%" in pattern:
+            self.is_sequence = True
+        # 计算输入帧率：让所有输入帧均匀分布在目标时长内
+        if self.is_sequence and self.num_input_frames > 0 and self.duration > 0:
+            self.input_fps = max(0.5, self.num_input_frames / self.duration)
+        else:
+            # 单张图或未知，退化为输出帧率
+            self.input_fps = float(self.output_fps)
     
     def _check_input_files(self):
         """检查是否有符合输入模式的图片文件"""
@@ -253,15 +246,12 @@ class ImageToVideoEffects:
         args = []
         # 允许覆盖输出
         args.extend(["-y"])
-        # 输入帧率控制
-        # 使用 -framerate（输入级别）对于图像序列比 -r 更安全
-        args.extend(["-framerate", str(self.fps)])
-        # 区分三种情况：glob（* / ? / [ ]）、printf模式（%d）、单文件
+        # 输入帧率控制（序列用自适应帧率，单图用loop）
         pattern = self.input_pattern
         if any(ch in pattern for ch in ["*", "?", "["]):
-            args.extend(["-pattern_type", "glob", "-i", pattern])
+            args.extend(["-framerate", str(self.input_fps), "-pattern_type", "glob", "-i", pattern])
         elif "%" in pattern:
-            args.extend(["-i", pattern])
+            args.extend(["-framerate", str(self.input_fps), "-i", pattern])
         else:
             # 单张图片：开启loop并限定时长
             args.extend(["-loop", "1", "-t", str(self.duration), "-i", pattern])
@@ -275,14 +265,25 @@ class ImageToVideoEffects:
             "-preset", "medium",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
-            "-r", str(self.fps),
-            "-t", str(self.duration),
+            "-r", str(self.output_fps),
             str(output_path)
         ]
     
     def _vf_chain(self, filters):
         """将滤镜列表拼接为 -vf 参数字符串。"""
         return ",".join(filters)
+    
+    def _vf_with_duration(self, filters, add_trim=False):
+        """在现有滤镜链后追加 tpad+trim 来保证输出时长。"""
+        chain = list(filters)
+        # 延长到至少 duration 秒（克隆最后一帧）
+        chain.append(f"tpad=stop_mode=clone:stop_duration={max(0.0, self.duration)}")
+        # 最后裁切为精确时长
+        if add_trim:
+            chain.append(f"trim=duration={self.duration}")
+        else:
+            chain.append(f"trim=duration={self.duration}")
+        return self._vf_chain(chain)
     
     def _pad_center(self):
         """返回居中填充到目标分辨率的 pad 滤镜。"""
@@ -293,7 +294,11 @@ class ImageToVideoEffects:
         print(f"开始生成所有特效视频...")
         print(f"输入图片模式: {self.input_pattern}")
         print(f"输出目录: {self.output_dir}")
-        print(f"帧率: {self.fps}")
+        print(f"帧率(输出): {self.output_fps}")
+        if self.is_sequence:
+            print(f"检测到序列输入，图片数: {self.num_input_frames}，自适应输入帧率: {self.input_fps:.3f} fps")
+        else:
+            print("检测到单张图片输入，将启用循环以满足时长")
         print(f"每段时长: {self.duration}s, 输出分辨率: {self.output_size}")
         print("=" * 50)
         
