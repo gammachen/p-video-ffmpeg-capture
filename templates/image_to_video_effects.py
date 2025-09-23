@@ -34,6 +34,11 @@ class ImageToVideoEffects:
         self.duration = float(duration)
         self.output_size = str(output_size)
         self.total_frames = max(1, int(self.fps * self.duration))
+        # 解析输出尺寸
+        try:
+            self.w, self.h = map(int, self.output_size.lower().split('x'))
+        except Exception:
+            raise ValueError(f"非法的输出分辨率: {self.output_size}，应为例如 1280x720")
         
         # 检查是否有符合模式的图片文件
         if not self._check_input_files():
@@ -56,7 +61,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         f"fps={self.fps}",
                         f"fade=in:0:{max(1, int(self.fps*0.6))}",
                         f"fade=out:{max(0, self.total_frames - int(self.fps*0.6))}:{max(1, int(self.fps*0.6))}"
@@ -70,10 +75,10 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         # 使用zoompan将每帧渲染一次，并移动x（t为秒）
                         # 注意：zoompan需要指定输出大小s
-                        f"zoompan=z=1:x=min(max(0, t*{int(self.output_size.split('x')[0])//self.duration}),(iw-w)):y=0:d=1:s={self.output_size}:fps={self.fps}"
+                        f"zoompan=z=1:x=min(max(0, t*{int(self.w//max(1,self.duration))}),(iw-w)):y=0:d=1:s={self.output_size}:fps={self.fps}"
                     ]
                 )
             },
@@ -83,7 +88,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         f"zoompan=z='min(1.0+0.15*t,1.5)':x='iw/2-(iw*zoom/2)':y='ih/2-(ih*zoom/2)':d=1:s={self.output_size}:fps={self.fps}"
                     ]
                 )
@@ -94,7 +99,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         f"fps={self.fps}",
                         "hue=s=0"
                     ]
@@ -106,7 +111,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         f"fps={self.fps}",
                         # 使用颜色通道混合实现复古色调
                         "colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131"
@@ -119,7 +124,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         f"fps={self.fps}",
                         "gblur=sigma=5"
                     ]
@@ -131,7 +136,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         f"fps={self.fps}",
                         # 如果系统找不到默认字体，建议在命令行传入 fontfile
                         "drawtext=text='My Slideshow':x=10:y=10:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.35:boxborderw=10"
@@ -144,7 +149,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         f"fps={self.fps}",
                         "drawtext=text='Frame %{n}':x=w-tw-20:y=20:fontsize=28:fontcolor=red:box=1:boxcolor=black@0.35:boxborderw=10"
                     ]
@@ -157,7 +162,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         f"fps={self.fps}",
                         "setpts=2.0*PTS",
                         f"trim=duration={self.duration}"
@@ -170,7 +175,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         f"fps={self.fps}",
                         "setpts=0.5*PTS",
                         f"trim=duration={self.duration}"
@@ -184,7 +189,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         f"fps={self.fps}",
                         "scale=iw/20:ih/20:flags=neighbor",
                         "scale=iw*20:ih*20:flags=neighbor"
@@ -197,7 +202,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         f"fps={self.fps}",
                         "split[a][b];[b]hflip[c];[a][c]hstack"
                     ]
@@ -209,7 +214,7 @@ class ImageToVideoEffects:
                 "filter": self._vf_chain(
                     [
                         f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                        f"pad={self.output_size}:(ow-iw)/2:(oh-ih)/2:color=black",
+                        self._pad_center(),
                         # 温和的Ken Burns
                         f"zoompan=z='min(1.0+0.1*t,1.2)':x='iw/2-(iw*zoom/2)':y='ih/2-(ih*zoom/2)':d=1:s={self.output_size}:fps={self.fps}",
                         f"fade=in:0:{max(1, int(self.fps*0.5))}",
@@ -278,6 +283,10 @@ class ImageToVideoEffects:
     def _vf_chain(self, filters):
         """将滤镜列表拼接为 -vf 参数字符串。"""
         return ",".join(filters)
+    
+    def _pad_center(self):
+        """返回居中填充到目标分辨率的 pad 滤镜。"""
+        return f"pad={self.w}:{self.h}:(ow-iw)/2:(oh-ih)/2:color=black"
     
     def generate_all_effects(self):
         """生成所有特效视频"""
