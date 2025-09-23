@@ -1,0 +1,485 @@
+# FFmpeg图片拼接剪辑工具
+
+设计一个完整的HTML页面，展示如何使用FFmpeg进行图片拼接和剪辑，包含可视化界面和功能说明。
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FFmpeg图片拼接剪辑工具</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.97);
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+        
+        header {
+            background: #2c3e50;
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        
+        h1 {
+            font-size: 2.8rem;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+        
+        .content {
+            display: flex;
+            flex-wrap: wrap;
+            padding: 20px;
+        }
+        
+        .main-content {
+            flex: 3;
+            min-width: 300px;
+            padding: 20px;
+        }
+        
+        .sidebar {
+            flex: 1;
+            min-width: 250px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 10px;
+        }
+        
+        section {
+            margin-bottom: 30px;
+        }
+        
+        h2 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #eaeaea;
+        }
+        
+        h3 {
+            color: #3498db;
+            margin: 15px 0 10px;
+        }
+        
+        p {
+            margin-bottom: 15px;
+            font-size: 1.05rem;
+        }
+        
+        .code-block {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 16px;
+            border-radius: 8px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            overflow-x: auto;
+            margin: 15px 0;
+            line-height: 1.5;
+            font-size: 1rem;
+        }
+        
+        .command-builder {
+            background: #e8f4fc;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        
+        button {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: bold;
+            transition: background 0.3s;
+            margin-right: 10px;
+            margin-top: 10px;
+        }
+        
+        button:hover {
+            background: #2980b9;
+        }
+        
+        .output-command {
+            background: #2c3e50;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        
+        .example {
+            background: #fff9e6;
+            border-left: 4px solid #ffcc00;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        
+        .tip {
+            background: #e8f4fc;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        
+        .warning {
+            background: #fde8e8;
+            border-left: 4px solid #e74c3c;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        
+        .fa-li {
+            color: #3498db;
+        }
+        
+        footer {
+            text-align: center;
+            padding: 20px;
+            background: #2c3e50;
+            color: #ecf0f1;
+            font-size: 0.9rem;
+        }
+        
+        .image-preview {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        
+        .preview-item {
+            width: 100px;
+            height: 100px;
+            background: #eee;
+            border: 2px dashed #ccc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+        }
+        
+        .preview-item i {
+            font-size: 2rem;
+            color: #777;
+        }
+        
+        @media (max-width: 768px) {
+            .content {
+                flex-direction: column;
+            }
+            
+            h1 {
+                font-size: 2.2rem;
+            }
+            
+            .main-content, .sidebar {
+                width: 100%;
+                margin: 0;
+            }
+            
+            .image-preview {
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>FFmpeg图片拼接剪辑工具</h1>
+            <p class="subtitle">使用FFmpeg将多张图片拼接成视频或制作幻灯片</p>
+        </header>
+        
+        <div class="content">
+            <div class="main-content">
+                <section>
+                    <h2>FFmpeg图片处理功能</h2>
+                    <p>FFmpeg可以将多张图片拼接成视频、创建幻灯片或生成动态相册。以下是一些常用的图片处理命令：</p>
+                    
+                    <h3>基本图片转视频</h3>
+                    <div class="code-block">
+# 将一系列图片转换为视频（按数字顺序）
+ffmpeg -framerate 24 -i image%03d.jpg output.mp4
+
+# 指定图片格式和帧率
+ffmpeg -framerate 30 -pattern_type glob -i "*.png" output.mp4
+                    </div>
+                    
+                    <h3>创建幻灯片效果</h3>
+                    <div class="code-block">
+# 创建带有过渡效果的幻灯片
+ffmpeg -framerate 1/3 -i img%03d.jpg -vf "fps=25,format=yuv420p" -c:v libx264 -crf 23 slideshow.mp4
+
+# 添加缩放平移效果（Ken Burns效应）
+ffmpeg -i img%03d.jpg -vf "zoompan=z='min(zoom+0.0015,1.5)':d=125:x='if(gte(zoom,1.5),x,x+1)':y='y+1':s=1280x720" -c:v libx264 output.mp4
+                    </div>
+                    
+                    <h3>图片拼接与网格布局</h3>
+                    <div class="code-block">
+# 将4张图片拼接成2x2网格
+ffmpeg -i input1.jpg -i input2.jpg -i input3.jpg -i input4.jpg \
+-filter_complex "[0:v][1:v]hstack=inputs=2[top];[2:v][3:v]hstack=inputs=2[bottom];[top][bottom]vstack=inputs=2[v]" \
+-map "[v]" output.jpg
+
+# 创建3x3图片网格
+ffmpeg -i input1.jpg -i input2.jpg -i input3.jpg -i input4.jpg -i input5.jpg \
+-i input6.jpg -i input7.jpg -i input8.jpg -i input9.jpg \
+-filter_complex "[0:v][1:v][2:v]hstack=inputs=3[top];[3:v][4:v][5:v]hstack=inputs=3[middle];[6:v][7:v][8:v]hstack=inputs=3[bottom];[top][middle][bottom]vstack=inputs=3[v]" \
+-map "[v]" output.jpg
+                    </div>
+                </section>
+                
+                <section class="command-builder">
+                    <h2>FFmpeg命令生成器</h2>
+                    
+                    <div class="form-group">
+                        <label for="imagePattern">图片模式:</label>
+                        <input type="text" id="imagePattern" placeholder="例如: image%03d.jpg 或 *.png" value="image%03d.jpg">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="framerate">帧率 (fps):</label>
+                        <input type="number" id="framerate" min="1" max="60" value="24">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="outputFile">输出文件:</label>
+                        <input type="text" id="outputFile" placeholder="输出视频路径" value="output.mp4">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="videoCodec">视频编码器:</label>
+                        <select id="videoCodec">
+                            <option value="libx264">H.264 (libx264)</option>
+                            <option value="libx265">H.265 (libx265)</option>
+                            <option value="vp9">VP9</option>
+                            <option value="prores">Apple ProRes</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="crf">CRF质量 (0-51, 越小质量越好):</label>
+                        <input type="number" id="crf" min="0" max="51" value="23">
+                    </div>
+                    
+                    <button onclick="generateCommand()">生成命令</button>
+                    <button onclick="generateSlideshowCommand()">生成幻灯片命令</button>
+                    <button onclick="generateGridCommand()">生成网格命令</button>
+                    <button onclick="copyCommand()">复制命令</button>
+                    
+                    <div class="output-command" id="outputCommand">
+                        # 生成的命令将显示在这里
+                    </div>
+                </section>
+                
+                <section>
+                    <h2>使用说明</h2>
+                    
+                    <div class="tip">
+                        <h3><i class="fas fa-lightbulb"></i> 提示</h3>
+                        <p>1. 确保图片命名有规律（如img001.jpg, img002.jpg）或使用通配符</p>
+                        <p>2. 对于幻灯片，较低的帧率可以让每张图片显示更长时间</p>
+                        <p>3. 使用CRF值控制视频质量：18-28是常用范围，23是默认值</p>
+                    </div>
+                    
+                    <div class="example">
+                        <h3><i class="fas fa-code"></i> 高级示例</h3>
+                        <p>创建带有淡入淡出效果的幻灯片：</p>
+                        <div class="code-block">
+ffmpeg -framerate 1/5 -i img%03d.jpg -vf "fps=25,format=yuv420p, \
+scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2, \
+fade=t=in:st=0:d=1,fade=t=out:st=4:d=1" \
+-c:v libx264 -crf 23 -preset medium slideshow_with_fade.mp4
+                        </div>
+                    </div>
+                    
+                    <div class="warning">
+                        <h3><i class="fas fa-exclamation-triangle"></i> 注意事项</h3>
+                        <p>1. 确保所有图片尺寸相同或使用scale过滤器统一尺寸</p>
+                        <p>2. 图片数量较多时，拼接可能需要较长时间</p>
+                        <p>3. 某些编码器可能需要额外安装</p>
+                    </div>
+                </section>
+            </div>
+            
+            <div class="sidebar">
+                <h2>常用参数</h2>
+                
+                <h3><i class="fas fa-cog"></i> 主要参数</h3>
+                <ul class="fa-ul">
+                    <li><span class="fa-li"><i class="fas fa-check"></i></span><strong>-framerate</strong> 输入帧率</li>
+                    <li><span class="fa-li"><i class="fas fa-check"></i></span><strong>-pattern_type</strong> 模式类型</li>
+                    <li><span class="fa-li"><i class="fas fa-check"></i></span><strong>-i</strong> 输入文件</li>
+                    <li><span class="fa-li"><i class="fas fa-check"></i></span><strong>-c:v</strong> 视频编码器</li>
+                    <li><span class="fa-li"><i class="fas fa-check"></i></span><strong>-crf</strong> 恒定质量因子</li>
+                </ul>
+                
+                <h3><i class="fas fa-film"></i> 输出格式</h3>
+                <ul class="fa-ul">
+                    <li><span class="fa-li"><i class="fas fa-file-video"></i></span><strong>.mp4</strong> H.264/H.265</li>
+                    <li><span class="fa-li"><i class="fas fa-file-video"></i></span><strong>.webm</strong> VP8/VP9</li>
+                    <li><span class="fa-li"><i class="fas fa-file-video"></i></span><strong>.mov</strong> ProRes</li>
+                    <li><span class="fa-li"><i class="fas fa-file-video"></i></span><strong>.gif</strong> 动画GIF</li>
+                </ul>
+                
+                <h3><i class="fas fa-th"></i> 网格布局参数</h3>
+                <p><strong>hstack</strong> - 水平拼接图片</p>
+                <p><strong>vstack</strong> - 垂直拼接图片</p>
+                <p><strong>xstack</strong> - 复杂网格布局</p>
+                
+                <div class="tip">
+                    <h3><i class="fas fa-magic"></i> 高级过滤器</h3>
+                    <p><strong>zoompan</strong> - 创建Ken Burns效果</p>
+                    <p><strong>fade</strong> - 添加淡入淡出效果</p>
+                    <p><strong>overlay</strong> - 图片叠加</p>
+                    <p><strong>scale</strong> - 调整图片尺寸</p>
+                </div>
+                
+                <h3>图片预览</h3>
+                <div class="image-preview">
+                    <div class="preview-item"><i class="fas fa-image"></i></div>
+                    <div class="preview-item"><i class="fas fa-image"></i></div>
+                    <div class="preview-item"><i class="fas fa-image"></i></div>
+                    <div class="preview-item"><i class="fas fa-image"></i></div>
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <p>© 2023 FFmpeg图片拼接剪辑工具 | 本工具仅提供命令参考，实际执行需要在命令行中运行</p>
+        </footer>
+    </div>
+
+    <script>
+        function generateCommand() {
+            const imagePattern = document.getElementById('imagePattern').value || 'image%03d.jpg';
+            const framerate = document.getElementById('framerate').value || '24';
+            const outputFile = document.getElementById('outputFile').value || 'output.mp4';
+            const videoCodec = document.getElementById('videoCodec').value || 'libx264';
+            const crf = document.getElementById('crf').value || '23';
+            
+            const command = `ffmpeg -framerate ${framerate} -i ${imagePattern} -c:v ${videoCodec} -crf ${crf} -pix_fmt yuv420p ${outputFile}`;
+            
+            document.getElementById('outputCommand').textContent = command;
+        }
+        
+        function generateSlideshowCommand() {
+            const imagePattern = document.getElementById('imagePattern').value || 'image%03d.jpg';
+            const framerate = document.getElementById('framerate').value || '24';
+            const outputFile = document.getElementById('outputFile').value || 'output.mp4';
+            const videoCodec = document.getElementById('videoCodec').value || 'libx264';
+            const crf = document.getElementById('crf').value || '23';
+            
+            const command = `ffmpeg -framerate 1/3 -i ${imagePattern} -vf "fps=${framerate},format=yuv420p" -c:v ${videoCodec} -crf ${crf} ${outputFile}`;
+            
+            document.getElementById('outputCommand').textContent = command;
+        }
+        
+        function generateGridCommand() {
+            const imagePattern = document.getElementById('imagePattern').value || 'image%03d.jpg';
+            const outputFile = document.getElementById('outputFile').value || 'output.jpg';
+            
+            const command = `ffmpeg -i ${imagePattern} -i ${imagePattern} -i ${imagePattern} -i ${imagePattern} \\\n  -filter_complex "[0:v][1:v]hstack=inputs=2[top];[2:v][3:v]hstack=inputs=2[bottom];[top][bottom]vstack=inputs=2[v]" \\\n  -map "[v]" ${outputFile}`;
+            
+            document.getElementById('outputCommand').textContent = command;
+        }
+        
+        function copyCommand() {
+            const commandText = document.getElementById('outputCommand').textContent;
+            
+            if (commandText && commandText !== '# 生成的命令将显示在这里') {
+                navigator.clipboard.writeText(commandText).then(() => {
+                    alert('命令已复制到剪贴板！');
+                }).catch(err => {
+                    console.error('无法复制文本: ', err);
+                });
+            } else {
+                alert('请先生成命令！');
+            }
+        }
+        
+        // 初始化生成一个命令
+        window.onload = generateCommand;
+    </script>
+</body>
+</html>
+```
+
+## 功能说明
+
+这个页面提供了以下功能：
+
+1. **FFmpeg命令示例**：展示常用的图片拼接和幻灯片制作命令
+2. **命令生成器**：通过表单输入生成定制化的FFmpeg命令
+3. **多种模式**：支持生成普通视频、幻灯片和网格拼接命令
+4. **参数说明**：解释常用参数的作用和用法
+5. **使用提示**：提供使用FFmpeg处理图片的实用技巧和注意事项
+6. **命令复制**：一键复制生成的命令到剪贴板
+
+## 使用方法
+
+1. 在表单中输入图片模式、帧率、输出文件名等参数
+2. 点击相应的生成按钮创建FFmpeg命令
+   - "生成命令"：创建基本图片转视频命令
+   - "生成幻灯片命令"：创建幻灯片效果命令
+   - "生成网格命令"：创建图片网格拼接命令
+3. 点击"复制命令"按钮将命令复制到剪贴板
+4. 在命令行终端中运行复制的命令
+
+这个页面完全响应式，可以在手机、平板和电脑上正常显示和使用。
