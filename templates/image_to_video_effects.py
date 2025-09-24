@@ -3,6 +3,7 @@
 """
 图片转视频特效工具
 根据技术文档实现所有ffmpeg图片转视频特效，生成不同的mp4结果，并最终合并为一个视频
+python image_to_video_effects_commented.py -i 'output_%03d.jpg'
 """
 import os
 import subprocess
@@ -53,6 +54,12 @@ class ImageToVideoEffects:
         # 创建输出目录
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
+        # 预先计算zoompan归一化分母，避免除0
+        self._zp_den = max(1, self.total_frames - 1)
+        
+        # 常用片段：先把图放大到至少覆盖目标画布（increase），再进行zoompan到目标尺寸
+        base_upscale = f"scale={self.output_size}:force_original_aspect_ratio=increase"
+        
         # 特效配置列表（使用更稳健的滤镜组合，统一时长与分辨率，避免黑屏/一闪而过）
         self.effects = [
             {
@@ -67,24 +74,30 @@ class ImageToVideoEffects:
                 ])
             },
             {
+                "name": "scroll_horizontal",
+                "description": "水平平移效果",
+                "filter": self._vf_with_duration([
+                    base_upscale,
+                    # 从左到右平移
+                    f"zoompan=z=1:x=(iw-{self.w})*on/{self._zp_den}:y=(ih-{self.h})/2:d=1:s={self.output_size}:fps={self.output_fps}"
+                ])
+            },
+            {
                 "name": "slide_horizontal",
                 "description": "水平滑动效果",
-                # 通过zoompan实现平移（z=1，仅移动x）
                 "filter": self._vf_with_duration([
-                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                    self._pad_center(),
-                    # 线性平移到最右侧
-                    f"zoompan=z=1:x=(iw-w)*t/{max(1.0,self.duration)}:y=0:d=1:s={self.output_size}:fps={self.output_fps}"
+                    base_upscale,
+                    # 与scroll类似，保持一致的实现
+                    f"zoompan=z=1:x=(iw-{self.w})*on/{self._zp_den}:y=(ih-{self.h})/2:d=1:s={self.output_size}:fps={self.output_fps}"
                 ])
             },
             {
                 "name": "zoompan_slow",
                 "description": "缓慢缩放效果 (Ken Burns)",
                 "filter": self._vf_with_duration([
-                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                    self._pad_center(),
-                    # 线性放大
-                    f"zoompan=z=1.0+0.15*t:x='iw/2-(iw*zoom/2)':y='ih/2-(ih*zoom/2)':d=1:s={self.output_size}:fps={self.output_fps}"
+                    base_upscale,
+                    # 以中心为基准进行缓慢放大
+                    f"zoompan=z=1.0+0.15*on/{self._zp_den}:x='iw/2-(ow*zoom/2)':y='ih/2-(oh*zoom/2)':d=1:s={self.output_size}:fps={self.output_fps}"
                 ])
             },
             {
@@ -98,13 +111,13 @@ class ImageToVideoEffects:
                 ])
             },
             {
-                "name": "sepia",
-                "description": "复古（棕褐色）效果",
+                "name": "vintage",
+                "description": "复古（棕褐色/曲线）效果",
                 "filter": self._vf_with_duration([
                     f"scale={self.output_size}:force_original_aspect_ratio=decrease",
                     self._pad_center(),
                     f"fps={self.output_fps}",
-                    # 使用颜色通道混合实现复古色调
+                    # 使用颜色通道混合模拟复古
                     "colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131"
                 ])
             },
@@ -186,10 +199,9 @@ class ImageToVideoEffects:
                 "name": "comprehensive",
                 "description": "高级综合特效 (缩放+淡入淡出+文字)",
                 "filter": self._vf_with_duration([
-                    f"scale={self.output_size}:force_original_aspect_ratio=decrease",
-                    self._pad_center(),
-                    # 线性Ken Burns
-                    f"zoompan=z=1.0+0.1*t:x='iw/2-(iw*zoom/2)':y='ih/2-(ih*zoom/2)':d=1:s={self.output_size}:fps={self.output_fps}",
+                    base_upscale,
+                    # 中心缓慢放大
+                    f"zoompan=z=1.0+0.1*on/{self._zp_den}:x='iw/2-(ow*zoom/2)':y='ih/2-(oh*zoom/2)':d=1:s={self.output_size}:fps={self.output_fps}",
                     f"fade=in:0:{max(1, int(self.output_fps*0.5))}",
                     f"fade=out:{max(0, self.total_frames - int(self.output_fps*0.5))}:{max(1, int(self.output_fps*0.5))}",
                     "drawtext=text='My Photo':x=(w-text_w)/2:y=h-text_h-40:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=20"
@@ -279,10 +291,7 @@ class ImageToVideoEffects:
         # 延长到至少 duration 秒（克隆最后一帧）
         chain.append(f"tpad=stop_mode=clone:stop_duration={max(0.0, self.duration)}")
         # 最后裁切为精确时长
-        if add_trim:
-            chain.append(f"trim=duration={self.duration}")
-        else:
-            chain.append(f"trim=duration={self.duration}")
+        chain.append(f"trim=duration={self.duration}")
         return self._vf_chain(chain)
     
     def _pad_center(self):
