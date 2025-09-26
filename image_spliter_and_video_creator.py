@@ -202,7 +202,7 @@ class ImageSpliterAndVideoCreator:
             "-f", "concat",
             "-safe", "0",
             "-i", file_list_path,
-            "-vf", f"scale={self.output_size}:force_original_aspect_ratio=decrease,pad={self.crop_width}:{self.crop_height}:(ow-iw)/2:(oh-ih)/2:black,fps={self.fps}",
+            "-vf", f"scale={self.crop_width}:force_original_aspect_ratio=decrease,pad={self.crop_width}:{self.crop_height}:(ow-iw)/2:(oh-ih)/2:black,fps={self.fps}",
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
             "-y",
