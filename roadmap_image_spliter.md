@@ -157,4 +157,18 @@ ffmpeg -i photo.jpg -vf "crop=ih*9/19.5:ih:(iw-ih*9/19.5)/2:0" mobile_wallpaper.
 ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 output.jpg
 ```
 
+```python
+cmd = [
+            "ffmpeg",
+            "-i", video1_path,
+            "-i", video2_path,
+            "-filter_complex", \
+            f"[0:v][1:v]xfade=transition=clockwisetumble:duration=0.7:offset={duration1-0.7},format=yuv420p",
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-y",
+            output_path
+        ]
+```
+
 FFmpeg的crop滤镜非常强大，可以精确控制切割的位置和尺寸，适合各种图片处理需求！

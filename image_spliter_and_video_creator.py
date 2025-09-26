@@ -181,15 +181,16 @@ class ImageSpliterAndVideoCreator:
     
     def _create_short_video(self, output_path):
         """创建时长非常短的视频"""
-        # 只使用前2张图片创建短视频（如果有的话）
-        short_images = self.cropped_images[:2] if len(self.cropped_images) >= 2 else self.cropped_images
+        # 只使用前2张图片创建短视频（如果有的话） 选择所有的，不要只选前2张，通过duration参数来控制short的形态
+        # short_images = self.cropped_images[:2] if len(self.cropped_images) >= 2 else self.cropped_images
+        short_images = self.cropped_images
         
         # 创建文件列表文件
         file_list_path = os.path.join(self.temp_dir, "short_filelist.txt")
         with open(file_list_path, 'w') as f:
             for img in short_images:
                 abs_path = os.path.abspath(img).replace('\\', '/')
-                f.write(f"file '{abs_path}'\nduration 0.7\n")  # 每张图片显示0.5秒
+                f.write(f"file '{abs_path}'\nduration 0.2\n")  # 每张图片显示0.5秒
             # 最后一张图片需要再写一次
             if short_images:
                 abs_path = os.path.abspath(short_images[-1]).replace('\\', '/')
@@ -222,7 +223,7 @@ class ImageSpliterAndVideoCreator:
         with open(file_list_path, 'w') as f:
             for img in self.cropped_images:
                 abs_path = os.path.abspath(img).replace('\\', '/')
-                f.write(f"file '{abs_path}'\nduration 0.5\n")  # 每张图片显示1秒
+                f.write(f"file '{abs_path}'\nduration 1\n")  # 每张图片显示1秒
             # 最后一张图片需要再写一次
             abs_path = os.path.abspath(self.cropped_images[-1]).replace('\\', '/')
             f.write(f"file '{abs_path}'\n")
@@ -260,7 +261,7 @@ class ImageSpliterAndVideoCreator:
             "-i", video1_path,
             "-i", video2_path,
             "-filter_complex", \
-            f"[0:v][1:v]xfade=transition=fade:duration=0.7:offset={duration1-0.7},format=yuv420p",
+            f"[0:v][1:v]xfade=transition=slideleft:duration=0.7:offset={duration1-0.7},format=yuv420p",
             "-c:v", "libx264",
             "-preset", "medium",
             "-y",
@@ -308,7 +309,7 @@ class ImageSpliterAndVideoCreator:
             return False
         finally:
             # 清理临时文件
-            self.clean_up()
+            # self.clean_up()
             print(f"清理临时目录: {self.temp_dir}")
 
 def parse_args():
