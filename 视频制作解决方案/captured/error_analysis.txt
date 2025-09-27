@@ -1,0 +1,15 @@
+## FFmpeg命令失败原因分析
+
+1. **原命令问题**：
+   - 原命令中 `xstack=inputs=5:layout=0_0|w0_0|0_h0|w0_h0[out]` 有配置错误
+   - 定义了5个输入(inputs=5)，但只提供了4个布局位置(layout只指定了4个)
+   - 这导致FFmpeg无法正确配置xstack滤镜，错误信息：`Failed to configure output pad on Parsed_xstack_15`
+
+2. **修复策略**：
+   - 使用hstack和vstack组合创建更灵活的布局
+   - 或者使用overlay滤镜逐个叠加图片
+   - 确保输入数量和布局位置完全匹配
+
+3. **推荐方案**：
+   - 对于5张图片，建议使用3+2的布局（上3下2）
+   - 或者使用overlay滤镜创建更自定义的布局

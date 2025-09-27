@@ -1,0 +1,18 @@
+# 原命令的修复版本（使用overlay滤镜逐个叠加5张图片）
+ffmpeg -loop 1 -i output_001.jpg -loop 1 -i output_002.jpg \
+       -loop 1 -i output_003.jpg -loop 1 -i output_004.jpg \
+       -loop 1 -i output_005.jpg \
+       -f lavfi -i color=black:1920x1080:r=30:d=3 \
+       -filter_complex \
+       "[0:v]scale=960:540,trim=duration=3,setpts=PTS-STARTPTS[img1];\
+        [1:v]scale=960:540,trim=duration=3,setpts=PTS-STARTPTS[img2];\
+        [2:v]scale=960:540,trim=duration=3,setpts=PTS-STARTPTS[img3];\
+        [3:v]scale=960:540,trim=duration=3,setpts=PTS-STARTPTS[img4];\
+        [4:v]scale=960:540,trim=duration=3,setpts=PTS-STARTPTS[img5];\
+        [5:v][img1]overlay=0:0[base1];\
+        [base1][img2]overlay=960:0[base2];\
+        [base2][img3]overlay=0:540[base3];\
+        [base3][img4]overlay=960:540[base4];\
+        [base4][img5]overlay=480:270[out]" \
+       -map "[out]" -t 3 -r 30 -c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p \
+       -y "fixed_original_style.mp4"
