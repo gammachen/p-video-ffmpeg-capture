@@ -48,13 +48,19 @@ class ImageSpliterAndVideoCreator:
         # 获取原图片尺寸
         self.original_width, self.original_height = self._get_image_dimensions(input_image)
         
+        # 确保切割尺寸是偶数（FFmpeg对某些滤镜有此要求）
+        self.crop_width = self.crop_width if self.crop_width % 2 == 0 else self.crop_width + 1
+        self.crop_height = self.crop_height if self.crop_height % 2 == 0 else self.crop_height + 1
+        
         # 验证切割尺寸是否合法
         if self.crop_width > self.original_width or self.crop_height > self.original_height:
             raise ValueError(f"切割尺寸({self.crop_width}x{self.crop_height})大于原图片尺寸({self.original_width}x{self.original_height})")
+        
+        print(f"调整后切割尺寸: {self.crop_width}x{self.crop_height} (确保为偶数)")
             
-        # 计算可以切割的行数和列数
-        self.cols = self.original_width // self.crop_width
-        self.rows = self.original_height // self.crop_height
+        # 计算可以切割的行数和列数（向上取整，确保包含所有内容）
+        self.cols = (self.original_width + self.crop_width - 1) // self.crop_width  # 向上取整
+        self.rows = (self.original_height + self.crop_height - 1) // self.crop_height  # 向上取整
         
         # 确保至少可以切割一块
         if self.cols < 1 or self.rows < 1:
@@ -123,7 +129,7 @@ class ImageSpliterAndVideoCreator:
             raise RuntimeError(f"获取图片尺寸失败: {str(e)}")
     
     def split_image(self):
-        """将图片切割成多张图片"""
+        """将图片切割成多张图片，包含处理剩余部分"""
         print(f"开始切割图片...")
         
         # 清空存储列表
@@ -136,14 +142,29 @@ class ImageSpliterAndVideoCreator:
                 x = col * self.crop_width
                 y = row * self.crop_height
                 
+                # 计算实际切割尺寸，确保不超出原图范围
+                actual_width = min(self.crop_width, self.original_width - x)
+                actual_height = min(self.crop_height, self.original_height - y)
+                
+                # 定义过小尺寸阈值（像素）
+                MIN_SIZE_THRESHOLD = 30
+                
+                # 检查是否是过小尺寸，如果是则跳过该切割块
+                if actual_width < MIN_SIZE_THRESHOLD or actual_height < MIN_SIZE_THRESHOLD:
+                    print(f"跳过过小切割块: 位置({x},{y}), 尺寸({actual_width}x{actual_height}) < 阈值({MIN_SIZE_THRESHOLD})")
+                    continue
+                
                 # 设置输出图片路径
                 output_image = os.path.join(self.temp_dir, f"cropped_{row}_{col}.jpg")
                 
-                # 构建ffmpeg命令切割图片
+                # 构建ffmpeg命令切割图片，并使用scale和pad确保所有切割块都具有统一的尺寸
+                # 1. 先裁剪出实际区域
+                # 2. 然后缩放到目标尺寸（保持宽高比）
+                # 3. 最后填充到目标尺寸，确保所有切割块尺寸一致
                 cmd = [
                     "ffmpeg",
                     "-i", self.input_image,
-                    "-vf", f"crop={self.crop_width}:{self.crop_height}:{x}:{y}",
+                    "-vf", f"crop={actual_width}:{actual_height}:{x}:{y},scale=iw*min({self.crop_width}/iw\,{self.crop_height}/ih):ih*min({self.crop_width}/iw\,{self.crop_height}/ih),pad={self.crop_width}:{self.crop_height}:(ow-iw)/2:(oh-ih)/2:black",
                     "-y",  # 覆盖已存在的文件
                     output_image
                 ]
@@ -152,7 +173,7 @@ class ImageSpliterAndVideoCreator:
                     # 执行命令
                     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     self.cropped_images.append(output_image)
-                    print(f"已切割: {output_image} (位置: {x},{y})")
+                    print(f"已切割: {output_image} (位置: {x},{y}, 尺寸: {actual_width}x{actual_height})")
                 except subprocess.CalledProcessError as e:
                     print(f"切割图片失败: {str(e)}")
                     raise
@@ -180,9 +201,8 @@ class ImageSpliterAndVideoCreator:
         print(f"视频合成完成: {self.output_video}")
     
     def _create_short_video(self, output_path):
-        """创建时长非常短的视频"""
-        # 只使用前2张图片创建短视频（如果有的话） 选择所有的，不要只选前2张，通过duration参数来控制short的形态
-        # short_images = self.cropped_images[:2] if len(self.cropped_images) >= 2 else self.cropped_images
+        """创建时长非常短的视频，确保能处理不同尺寸的图片"""
+        # 使用所有切割后的图片创建短视频
         short_images = self.cropped_images
         
         # 创建文件列表文件
@@ -190,24 +210,28 @@ class ImageSpliterAndVideoCreator:
         with open(file_list_path, 'w') as f:
             for img in short_images:
                 abs_path = os.path.abspath(img).replace('\\', '/')
-                f.write(f"file '{abs_path}'\nduration 0.2\n")  # 每张图片显示0.5秒
+                f.write(f"file '{abs_path}'\nduration 0.2\n")  # 每张图片显示0.2秒
             # 最后一张图片需要再写一次
             if short_images:
                 abs_path = os.path.abspath(short_images[-1]).replace('\\', '/')
                 f.write(f"file '{abs_path}'\n")
         
         # 构建ffmpeg命令合成短视频
+        # 由于切割的图片已经是统一尺寸，这里只需要设置fps即可
+        # 仍然保留scale和pad作为保险措施，确保所有图片在视频中显示为统一尺寸
         cmd = [
             "ffmpeg",
             "-f", "concat",
             "-safe", "0",
             "-i", file_list_path,
-            "-vf", f"scale={self.crop_width}:force_original_aspect_ratio=decrease,pad={self.crop_width}:{self.crop_height}:(ow-iw)/2:(oh-ih)/2:black,fps={self.fps}",
+            "-vf", f"scale={self.crop_width}:{self.crop_height}:force_original_aspect_ratio=decrease,pad={self.crop_width}:{self.crop_height}:(ow-iw)/2:(oh-ih)/2:black,fps={self.fps}",
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
             "-y",
             output_path
         ]
+        
+        print(f"ffmpeg cmd: {cmd}")
         
         try:
             subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -217,7 +241,7 @@ class ImageSpliterAndVideoCreator:
             raise
     
     def _create_main_video(self, output_path):
-        """创建包含所有图片的主视频"""
+        """创建包含所有图片的主视频，确保能处理不同尺寸的图片"""
         # 创建文件列表文件
         file_list_path = os.path.join(self.temp_dir, "main_filelist.txt")
         with open(file_list_path, 'w') as f:
@@ -229,17 +253,21 @@ class ImageSpliterAndVideoCreator:
             f.write(f"file '{abs_path}'\n")
         
         # 构建ffmpeg命令合成主视频
+        # 由于切割的图片已经是统一尺寸，这里只需要设置fps即可
+        # 仍然保留scale和pad作为保险措施，确保所有图片在视频中显示为统一尺寸
         cmd = [
             "ffmpeg",
             "-f", "concat",
             "-safe", "0",
             "-i", file_list_path,
-            "-vf", f"scale={self.output_size}:force_original_aspect_ratio=decrease,pad={self.crop_width}:{self.crop_height}:(ow-iw)/2:(oh-ih)/2:black,fps={self.fps}",
+            "-vf", f"scale={self.crop_width}:{self.crop_height}:force_original_aspect_ratio=decrease,pad={self.crop_width}:{self.crop_height}:(ow-iw)/2:(oh-ih)/2:black,fps={self.fps}",
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
             "-y",
             output_path
         ]
+        
+        print(f"ffmpeg cmd: {cmd}")
         
         try:
             subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -255,13 +283,16 @@ class ImageSpliterAndVideoCreator:
         duration1 = self._get_video_duration(video1_path)
         
         # 构建ffmpeg命令合并视频并添加转场
-        # 使用xfade滤镜实现转场效果，transition参数可以是fade、slideup、slidedown等
+        # 确保两个视频在合并前都具有相同的尺寸，以避免转场时出现问题
+        # 使用scale和pad滤镜确保两个视频都具有相同的尺寸
         cmd = [
             "ffmpeg",
             "-i", video1_path,
             "-i", video2_path,
             "-filter_complex", \
-            f"[0:v][1:v]xfade=transition=slideleft:duration=0.7:offset={duration1-0.7},format=yuv420p",
+            f"[0:v]scale={self.crop_width}:{self.crop_height}:force_original_aspect_ratio=decrease,pad={self.crop_width}:{self.crop_height}:(ow-iw)/2:(oh-ih)/2:black[v0];"
+            f"[1:v]scale={self.crop_width}:{self.crop_height}:force_original_aspect_ratio=decrease,pad={self.crop_width}:{self.crop_height}:(ow-iw)/2:(oh-ih)/2:black[v1];"
+            f"[v0][v1]xfade=transition=slideleft:duration=0.7:offset={duration1-0.7},format=yuv420p",
             "-c:v", "libx264",
             "-preset", "medium",
             "-y",
@@ -309,7 +340,7 @@ class ImageSpliterAndVideoCreator:
             return False
         finally:
             # 清理临时文件
-            # self.clean_up()
+            self.clean_up()
             print(f"清理临时目录: {self.temp_dir}")
 
 def parse_args():
