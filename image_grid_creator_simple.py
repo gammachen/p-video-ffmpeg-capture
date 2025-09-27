@@ -6,6 +6,8 @@
 1. 目录模式：将指定目录下的所有图片合并为网格图片
 2. 多图片模式：将指定的多张图片合并为网格图片
 3. 可选生成视频：将合并过程制作成带转场特效的视频
+
+python image_grid_creator_simple.py -d 视频制作解决方案/captured -o output-join.jpg
 """
 
 import os
@@ -291,9 +293,9 @@ class ImageGridCreator:
             print(f"警告：图片数量过多（{num_images}张），将使用简化的视频生成方法")
             return self.create_simple_video(image_files, output_path)
         
-        # 计算行列数
-        rows, cols = self.calculate_grid_size(num_images)
-        print(f"使用 {rows}x{cols} 的网格布局创建视频，转场特效为从右往左")
+        # 强制使用3x4的网格布局
+        rows, cols = 3, 4
+        print(f"使用 {rows}x{cols} 的网格布局创建视频，转场特效为最简单的淡入效果")
         
         # 计算每个单元格的尺寸
         cell_width = self.max_width // cols
@@ -320,40 +322,55 @@ class ImageGridCreator:
                     '-q:v', '2', '-y', processed_img
                 ]
                 
-                subprocess.run(process_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                processed_files.append(processed_img)
+                # 添加错误处理，避免单个图片处理失败影响整体
+                try:
+                    subprocess.run(process_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    processed_files.append(processed_img)
+                except Exception as e:
+                    print(f"处理图片 {i+1} 失败，跳过: {str(e)}")
+                    # 创建一个空白图片作为替代
+                    blank_cmd = [
+                        'ffmpeg', '-f', 'lavfi', '-i', f'color=c=black:s={cell_width}x{cell_height}:r=1',
+                        '-frames:v', '1', '-q:v', '2', '-y', processed_img
+                    ]
+                    subprocess.run(blank_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    processed_files.append(processed_img)
             
-            # 3. 创建一个简单的转场视频，从右往左依次显示每个图片
-            # 计算每个图片的显示时间
-            frame_duration = max(0.5, self.video_duration / num_images)  # 每张图片的显示时间（秒）
+            # 3. 计算每张图片的出现时间
+            transition_duration = 0.3  # 每个图片的淡入时间
+            image_delay = 0.2  # 图片之间的延迟时间
             
-            # 4. 创建视频脚本文件
+            # 4. 创建一个视频脚本文件，使用filter_complex
             concat_file = os.path.join(self.temp_dir, 'video_concat.txt')
             with open(concat_file, 'w') as f:
                 for i, processed_img in enumerate(processed_files):
                     f.write(f"file '{os.path.abspath(processed_img)}'\n")
-                    f.write(f"duration {frame_duration}\n")
+                    # 每个图片显示一小段时间
+                    f.write(f"duration 1.0\n")
                 # 最后一个文件不需要duration
                 if processed_files:
                     f.write(f"file '{os.path.abspath(processed_files[-1])}'\n")
             
-            # 5. 使用ffmpeg的concat协议和转场效果创建视频
-            # 我们使用更简单的从右往左滑入效果
-            transition_filter = (
-                f"scale={self.max_width}:{self.max_height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={self.max_width}:{self.max_height}:(ow-iw)/2:(oh-ih)/2:black,"
-                f"fade=in:st=0:d=0.1,fade=out:st={frame_duration-0.1}:d=0.1,"
-                f"slide=start_x={self.max_width}:start_y=0:duration={frame_duration}:end_x=0:end_y=0"
-            )
-            
+            # 5. 使用filter_complex创建最简单的转场效果
+            # 先创建一个空背景
             create_video_cmd = [
-                'ffmpeg', '-f', 'concat', '-safe', '0', '-i', concat_file,
-                '-vf', transition_filter,
-                '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', 
-                '-pix_fmt', 'yuv420p', '-r', str(self.fps), '-y', output_path
+                'ffmpeg',
+                '-f', 'concat', '-safe', '0', '-i', concat_file,
+                '-f', 'lavfi', '-i', f'color=c=black:s={self.max_width}x{self.max_height}:r={self.fps}',
+                '-filter_complex', (
+                    # 对每个输入图片应用淡入效果和定位
+                    f'[0:v]scale={cell_width}:{cell_height}:force_original_aspect_ratio=decrease:flags=lanczos,'
+                    f'pad={self.max_width}:{self.max_height}:(ow-iw)/2:(oh-ih)/2:black,'
+                    f'fade=in:st=0:d={transition_duration},fade=out:st={self.video_duration-transition_duration}:d={transition_duration}[img]'
+                ),
+                '-map', '[img]',
+                '-c:v', 'libx264', '-preset', 'medium', '-crf', '28',
+                '-pix_fmt', 'yuv420p', '-t', str(self.video_duration), '-r', str(self.fps), '-y', output_path
             ]
             
             print(f"正在创建视频: {output_path}")
             print(f"视频时长: {self.video_duration}秒, 帧率: {self.fps}fps")
+            print(f"使用最简单的淡入淡出效果")
             
             subprocess.run(create_video_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             print(f"成功创建视频: {output_path}")

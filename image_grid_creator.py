@@ -294,7 +294,7 @@ class ImageGridCreator:
         
         # 计算行列数
         rows, cols = self.calculate_grid_size(num_images)
-        print(f"使用 {rows}x{cols} 的网格布局创建视频，转场特效为逐个翻转进入")
+        print(f"使用 {rows}x{cols} 的网格布局创建视频，转场特效为逐个淡入进入")
         
         # 计算每个单元格的尺寸
         cell_width = self.max_width // cols
@@ -317,8 +317,8 @@ class ImageGridCreator:
                 f.write(f"file '{os.path.abspath(self.temp_dir)}/background.jpg'\n")
                 f.write(f"duration 0.1\n")
                 
-                # 逐个处理图片，实现翻转进入效果
-                transition_duration = 0.5  # 每个图片翻转动画的持续时间
+                # 逐个处理图片，实现简单的淡入效果
+                transition_duration = 0.5  # 每个图片淡入动画的持续时间
                 total_transition_time = num_images * transition_duration
                 still_time = max(0, self.video_duration - total_transition_time)
                 
@@ -330,7 +330,7 @@ class ImageGridCreator:
                 ]
                 subprocess.run(create_blank_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
-                # 逐个处理图片，创建带有翻转效果的中间视频
+                # 逐个处理图片，创建带有淡入效果的中间视频
                 for i, img_path in enumerate(image_files):
                     # 计算图片在网格中的位置
                     row = i // cols
@@ -345,12 +345,23 @@ class ImageGridCreator:
                         '-vf', f'scale={cell_width}:{cell_height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={cell_width}:{cell_height}:(ow-iw)/2:(oh-ih)/2:black',
                         '-q:v', '2', '-y', processed_img
                     ]
-                    subprocess.run(process_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    
+                    # 添加错误处理，避免单个图片处理失败影响整体
+                    try:
+                        subprocess.run(process_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    except Exception as e:
+                        print(f"处理图片 {i+1} 失败，跳过: {str(e)}")
+                        # 创建一个空白图片作为替代
+                        blank_cmd = [
+                            'ffmpeg', '-f', 'lavfi', '-i', f'color=c=black:s={cell_width}x{cell_height}:r=1',
+                            '-frames:v', '1', '-q:v', '2', '-y', processed_img
+                        ]
+                        subprocess.run(blank_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     
                     # 创建当前步骤的临时视频
                     temp_video = os.path.join(processed_dir, f'step_{i}.mp4')
                     
-                    # 构建FFmpeg命令，实现当前图片的翻转进入效果
+                    # 构建FFmpeg命令，实现当前图片的淡入进入效果
                     # 先创建前一步的完整背景
                     # 使用不同的文件名避免冲突
                     prev_bg = os.path.join(processed_dir, f'prev_bg_{i}.jpg')
@@ -367,34 +378,30 @@ class ImageGridCreator:
                         # 初始为纯黑背景
                         shutil.copy2(background_path, prev_bg)
                     
-                    # 为当前图片创建翻转进入效果（使用更高效的动画实现）
-                    flip_cmd = [
+                    # 为当前图片创建最简单的淡入效果
+                    fade_cmd = [
                         'ffmpeg', '-loop', '1', '-i', prev_bg,
                         '-loop', '1', '-i', processed_img,
                         '-vf', (
-                            # 使用更高效的翻转动画实现，避免复杂的时间函数计算
-                            f'[1:v]format=rgba,pad=iw+10:ih+10:(ow-iw)/2:(oh-ih)/2:color=black@0[img_padded];'
-                            # 使用更简单的淡入和位移动画替代缩放动画，减少计算复杂度
-                            f'[img_padded]fade=in:st=0:d={transition_duration},trim=duration={transition_duration},setpts=PTS-STARTPTS[img_flip];'
-                            # 添加轻微的位移动画，模拟从左侧滑入效果
-                            f'[img_flip]translate=w*(({transition_duration}-t)/{transition_duration}):0[img_translated];'
-                            f'[0:v][img_translated]overlay=x={x_pos}:y={y_pos}:shortest=1[out];'
+                            # 最简单的淡入效果，直接叠加到背景上
+                            f'[1:v]fade=in:st=0:d={transition_duration},trim=duration={transition_duration},setpts=PTS-STARTPTS[img_in];'
+                            f'[0:v][img_in]overlay=x={x_pos}:y={y_pos}:shortest=1[out];'
                             f'[out]split[out1][out2]'
                         ),
-                        '-map', '[out1]', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25', '-pix_fmt', 'yuv420p', 
+                        '-map', '[out1]', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p', 
                         '-r', str(self.fps), '-y', temp_video,
                         '-map', '[out2]', '-frames:v', '1', '-q:v', '2', current_bg
                     ]
                     
                     # 添加错误处理，避免单个图片处理失败影响整体
                     try:
-                        subprocess.run(flip_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        subprocess.run(fade_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     except Exception as e:
-                        print(f"创建图片 {i+1} 的翻转效果失败，跳过: {str(e)}")
+                        print(f"创建图片 {i+1} 的淡入效果失败，跳过: {str(e)}")
                         # 创建一个空的过渡视频
                         empty_cmd = [
                             'ffmpeg', '-f', 'lavfi', '-i', f'color=c=black:s={self.max_width}x{self.max_height}:r={self.fps}',
-                            '-t', str(transition_duration), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', 
+                            '-t', str(transition_duration), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', 
                             '-pix_fmt', 'yuv420p', '-y', temp_video
                         ]
                         subprocess.run(empty_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -417,13 +424,13 @@ class ImageGridCreator:
             # 5. 使用concat协议合并所有视频片段
             create_video_cmd = [
                 'ffmpeg', '-f', 'concat', '-safe', '0', '-i', concat_file,
-                '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', 
+                '-c:v', 'libx264', '-preset', 'medium', '-crf', '28', 
                 '-pix_fmt', 'yuv420p', '-r', str(self.fps), '-y', output_path
             ]
             
             print(f"正在创建视频: {output_path}")
             print(f"视频时长: {self.video_duration}秒, 帧率: {self.fps}fps")
-            print(f"每个图片以翻转方式依次进入，顺序为从左到右，从上到下")
+            print(f"每个图片以淡入方式依次进入，顺序为从左到右，从上到下")
             
             subprocess.run(create_video_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             print(f"成功创建视频: {output_path}")
@@ -452,7 +459,7 @@ class ImageGridCreator:
         return self.create_simple_flip_video(image_files, output_path)
     
     def create_simple_flip_video(self, image_files: List[str], output_path: str) -> bool:
-        """为图片创建简化的翻转效果视频
+        """为图片创建简化的淡入效果视频
         
         Args:
             image_files: 图片文件列表
@@ -469,12 +476,12 @@ class ImageGridCreator:
                 return False
             
             # 2. 使用这个网格图片创建一个带有动态效果的视频
-            # 采用更简单的方法实现逐个翻转进入效果
+            # 采用更简单的方法实现逐个淡入效果
             rows, cols = self.calculate_grid_size(len(image_files))
             num_images = len(image_files)
             
             # 创建视频脚本文件
-            concat_file = os.path.join(self.temp_dir, 'simple_flip_concat.txt')
+            concat_file = os.path.join(self.temp_dir, 'simple_fade_concat.txt')
             temp_files = []  # 用于跟踪临时文件
             
             with open(concat_file, 'w') as f:
@@ -482,14 +489,14 @@ class ImageGridCreator:
                 f.write(f"file '{os.path.abspath(grid_image_path)}'\n")
                 f.write(f"duration 0.1\n")
                 
-                # 计算每个翻转效果的持续时间
+                # 计算每个淡入效果的持续时间
                 transition_duration = max(0.2, self.video_duration / (num_images + 2))  # 留一些时间给开头和结尾
                 
                 # 创建一个临时目录存储中间视频片段
                 temp_frames_dir = os.path.join(self.temp_dir, 'temp_frames')
                 os.makedirs(temp_frames_dir, exist_ok=True)
                 
-                # 为每个图片创建一个简单的翻转效果
+                # 为每个图片创建一个简单的淡入效果
                 for i in range(num_images):
                     # 计算图片在网格中的位置
                     row = i // cols
@@ -500,25 +507,21 @@ class ImageGridCreator:
                     y_pos = row * cell_h
                     
                     # 创建临时视频文件
-                    temp_video = os.path.join(temp_frames_dir, f'simple_flip_{i}.mp4')
+                    temp_video = os.path.join(temp_frames_dir, f'simple_fade_{i}.mp4')
                     temp_files.append(temp_video)
                     
-                    # 创建一个简单的翻转动画：从左侧翻转进入
-                    # 使用更高效的FFmpeg滤镜链，减少资源消耗
-                    flip_cmd = [
+                    # 创建最简单的图片进入效果
+                    fade_cmd = [
                         'ffmpeg', '-loop', '1', '-i', grid_image_path,
                         '-vf', (
-                            # 创建一个从左到右的淡入和位移动画
-                            # 先创建一个基础层，只显示背景
+                            # 创建黑色背景
                             f'color=c=black:s={self.max_width}x{self.max_height}[bg];'
-                            # 裁剪出当前图片的位置
-                            f'crop=w={cell_w}:h={cell_h}:x={x_pos}:y={y_pos}[img_cropped];'
-                            # 添加简单的淡入和位移动画替代复杂的翻转效果
-                            # 使用位移和淡入效果模拟翻转进入
-                            f'[img_cropped]fade=in:st=0:d={transition_duration},translate=w*(({transition_duration}-t)/{transition_duration}):0,'
-                            f'trim=duration={transition_duration},setpts=PTS-STARTPTS[animated];'
-                            # 将动画放置到正确的位置
-                            f'[bg][animated]overlay=x={x_pos}:y={y_pos}[out]'
+                            # 裁剪出当前图片
+                            f'crop=w={cell_w}:h={cell_h}:x={x_pos}:y={y_pos}[img];'
+                            # 最简单的淡入效果
+                            f'[img]fade=in:st=0:d={transition_duration},trim=duration={transition_duration},setpts=PTS-STARTPTS[img_faded];'
+                            # 叠加到背景
+                            f'[bg][img_faded]overlay=x={x_pos}:y={y_pos}[out]'
                         ),
                         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', 
                         '-pix_fmt', 'yuv420p', '-r', str(self.fps), '-y', temp_video
@@ -526,11 +529,11 @@ class ImageGridCreator:
                     
                     # 执行命令创建临时视频，添加错误处理
                     try:
-                        subprocess.run(flip_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        subprocess.run(fade_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                         # 添加到concat文件
                         f.write(f"file '{os.path.abspath(temp_video)}'\n")
                     except Exception as e:
-                        print(f"创建图片 {i+1} 的简化翻转动画失败，跳过: {str(e)}")
+                        print(f"创建图片 {i+1} 的简化淡入动画失败，跳过: {str(e)}")
                         # 如果失败，添加一个短暂的空白帧
                         blank_video = os.path.join(temp_frames_dir, f'blank_{i}.mp4')
                         temp_files.append(blank_video)
@@ -538,7 +541,7 @@ class ImageGridCreator:
                         # 创建空白视频
                         blank_cmd = [
                             'ffmpeg', '-f', 'lavfi', '-i', f'color=c=black:s={self.max_width}x{self.max_height}:r={self.fps}',
-                            '-t', str(0.1), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25',
+                            '-t', str(0.1), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
                             '-pix_fmt', 'yuv420p', '-y', blank_video
                         ]
                         subprocess.run(blank_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -557,7 +560,7 @@ class ImageGridCreator:
                     
                     static_cmd = [
                         'ffmpeg', '-loop', '1', '-i', grid_image_path,
-                        '-t', str(remaining_time), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25',
+                        '-t', str(remaining_time), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
                         '-pix_fmt', 'yuv420p', '-r', str(self.fps), '-y', static_video
                     ]
                     subprocess.run(static_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -566,13 +569,13 @@ class ImageGridCreator:
             # 合并所有视频片段
             create_video_cmd = [
                 'ffmpeg', '-f', 'concat', '-safe', '0', '-i', concat_file,
-                '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', 
+                '-c:v', 'libx264', '-preset', 'medium', '-crf', '28', 
                 '-pix_fmt', 'yuv420p', '-r', str(self.fps), '-y', output_path
             ]
             
             print(f"正在创建简化视频: {output_path}")
             print(f"视频时长: {self.video_duration}秒, 帧率: {self.fps}fps")
-            print(f"使用分阶段处理实现图片逐个翻转显示效果")
+            print(f"使用分阶段处理实现图片逐个淡入显示效果")
             
             subprocess.run(create_video_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             print(f"成功创建简化视频: {output_path}")
