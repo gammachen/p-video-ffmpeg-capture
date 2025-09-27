@@ -15,6 +15,7 @@ import math
 import subprocess
 import tempfile
 import glob
+import shutil
 from typing import List, Tuple, Optional
 
 # 尝试导入PIL库，如果没有安装则提供友好的错误信息
@@ -287,13 +288,13 @@ class ImageGridCreator:
             return False
         
         # 对于大量图片，简化视频生成逻辑以避免命令行过长
-        if num_images > 50:
-            print(f"警告：图片数量过多（{num_images}张），将使用简化的视频生成方法")
-            return self.create_simple_video(image_files, output_path)
+        if num_images > 20:
+            print(f"警告：图片数量较多（{num_images}张），将使用简化的翻转效果视频生成方法")
+            return self.create_simple_flip_video(image_files, output_path)
         
         # 计算行列数
         rows, cols = self.calculate_grid_size(num_images)
-        print(f"使用 {rows}x{cols} 的网格布局创建视频，转场特效为从右往左")
+        print(f"使用 {rows}x{cols} 的网格布局创建视频，转场特效为逐个翻转进入")
         
         # 计算每个单元格的尺寸
         cell_width = self.max_width // cols
@@ -308,52 +309,120 @@ class ImageGridCreator:
             processed_dir = os.path.join(self.temp_dir, 'processed_images')
             os.makedirs(processed_dir, exist_ok=True)
             
-            # 2. 处理每张图片并保存为临时文件
-            processed_files = []
-            for i, img_path in enumerate(image_files):
-                processed_img = os.path.join(processed_dir, f'processed_{i}.jpg')
-                
-                # 缩放到单元格大小并居中
-                process_cmd = [
-                    'ffmpeg', '-i', img_path,
-                    '-vf', f'scale={cell_width}:{cell_height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={cell_width}:{cell_height}:(ow-iw)/2:(oh-ih)/2:black',
-                    '-q:v', '2', '-y', processed_img
-                ]
-                
-                subprocess.run(process_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                processed_files.append(processed_img)
-            
-            # 3. 创建一个简单的转场视频，从右往左依次显示每个图片
-            # 计算每个图片的显示时间
-            frame_duration = max(0.5, self.video_duration / num_images)  # 每张图片的显示时间（秒）
-            
-            # 4. 创建视频脚本文件
+            # 2. 创建视频脚本文件，使用分阶段处理方式
             concat_file = os.path.join(self.temp_dir, 'video_concat.txt')
+            
             with open(concat_file, 'w') as f:
-                for i, processed_img in enumerate(processed_files):
-                    f.write(f"file '{os.path.abspath(processed_img)}'\n")
-                    f.write(f"duration {frame_duration}\n")
-                # 最后一个文件不需要duration
-                if processed_files:
-                    f.write(f"file '{os.path.abspath(processed_files[-1])}'\n")
+                # 初始背景帧
+                f.write(f"file '{os.path.abspath(self.temp_dir)}/background.jpg'\n")
+                f.write(f"duration 0.1\n")
+                
+                # 逐个处理图片，实现翻转进入效果
+                transition_duration = 0.5  # 每个图片翻转动画的持续时间
+                total_transition_time = num_images * transition_duration
+                still_time = max(0, self.video_duration - total_transition_time)
+                
+                # 先创建背景图片
+                background_path = os.path.join(self.temp_dir, 'background.jpg')
+                create_blank_cmd = [
+                    'ffmpeg', '-f', 'lavfi', '-i', f'color=c=black:s={self.max_width}x{self.max_height}:r=1',
+                    '-frames:v', '1', '-q:v', '2', '-y', background_path
+                ]
+                subprocess.run(create_blank_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                
+                # 逐个处理图片，创建带有翻转效果的中间视频
+                for i, img_path in enumerate(image_files):
+                    # 计算图片在网格中的位置
+                    row = i // cols
+                    col = i % cols
+                    x_pos = col * cell_width
+                    y_pos = row * cell_height
+                    
+                    # 处理当前图片
+                    processed_img = os.path.join(processed_dir, f'processed_{i}.jpg')
+                    process_cmd = [
+                        'ffmpeg', '-i', img_path,
+                        '-vf', f'scale={cell_width}:{cell_height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={cell_width}:{cell_height}:(ow-iw)/2:(oh-ih)/2:black',
+                        '-q:v', '2', '-y', processed_img
+                    ]
+                    subprocess.run(process_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    
+                    # 创建当前步骤的临时视频
+                    temp_video = os.path.join(processed_dir, f'step_{i}.mp4')
+                    
+                    # 构建FFmpeg命令，实现当前图片的翻转进入效果
+                    # 先创建前一步的完整背景
+                    # 使用不同的文件名避免冲突
+                    prev_bg = os.path.join(processed_dir, f'prev_bg_{i}.jpg')
+                    current_bg = os.path.join(processed_dir, f'bg_{i}.jpg')
+                    
+                    if i > 0:
+                        # 复制前一步的最终状态作为背景，添加错误处理
+                        try:
+                            shutil.copy2(os.path.join(processed_dir, f'bg_{i-1}.jpg'), prev_bg)
+                        except FileNotFoundError:
+                            # 如果前一步的背景不存在，使用初始背景
+                            shutil.copy2(background_path, prev_bg)
+                    else:
+                        # 初始为纯黑背景
+                        shutil.copy2(background_path, prev_bg)
+                    
+                    # 为当前图片创建翻转进入效果（使用更简单的翻转动画）
+                    flip_cmd = [
+                        'ffmpeg', '-loop', '1', '-i', prev_bg,
+                        '-loop', '1', '-i', processed_img,
+                        '-vf', (
+                            # 使用简单的水平翻转和缩放动画实现翻转效果
+                            f'[1:v]format=rgba,pad=iw+10:ih+10:(ow-iw)/2:(oh-ih)/2:color=black@0,trim=duration={transition_duration},setpts=PTS-STARTPTS,'
+                            # 简单的缩放和水平翻转动画
+                            f'scale=iw*t/{transition_duration}:ih,format=yuv420p[scaled];'
+                            f'[scaled]fade=in:st=0:d={transition_duration/2}[img_flip];'
+                            f'[0:v][img_flip]overlay=x={x_pos}:y={y_pos}:shortest=1[out];'
+                            f'[out]split[out1][out2]'
+                        ),
+                        '-map', '[out1]', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-pix_fmt', 'yuv420p', 
+                        '-r', str(self.fps), '-y', temp_video,
+                        '-map', '[out2]', '-frames:v', '1', '-q:v', '2', current_bg
+                    ]
+                    
+                    # 添加错误处理，避免单个图片处理失败影响整体
+                    try:
+                        subprocess.run(flip_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    except Exception as e:
+                        print(f"创建图片 {i+1} 的翻转效果失败，跳过: {str(e)}")
+                        # 创建一个空的过渡视频
+                        empty_cmd = [
+                            'ffmpeg', '-f', 'lavfi', '-i', f'color=c=black:s={self.max_width}x{self.max_height}:r={self.fps}',
+                            '-t', str(transition_duration), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', 
+                            '-pix_fmt', 'yuv420p', '-y', temp_video
+                        ]
+                        subprocess.run(empty_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        # 复制前一步的背景
+                        shutil.copy2(prev_bg, current_bg)
+                    
+                    # 添加到concat文件
+                    f.write(f"file '{os.path.abspath(temp_video)}'\n")
+                
+                # 如果有剩余时间，添加最后一帧的静止画面
+                if still_time > 0:
+                    try:
+                        last_frame = os.path.join(processed_dir, f'bg_{num_images-1}.jpg')
+                        f.write(f"file '{os.path.abspath(last_frame)}'\n")
+                    except FileNotFoundError:
+                        # 如果最后一帧不存在，使用背景
+                        f.write(f"file '{os.path.abspath(background_path)}'\n")
+                    f.write(f"duration {still_time}\n")
             
-            # 5. 使用ffmpeg的concat协议和转场效果创建视频
-            # 我们使用更简单的从右往左滑入效果
-            transition_filter = (
-                f"scale={self.max_width}:{self.max_height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={self.max_width}:{self.max_height}:(ow-iw)/2:(oh-ih)/2:black,"
-                f"fade=in:st=0:d=0.1,fade=out:st={frame_duration-0.1}:d=0.1,"
-                f"slide=start_x={self.max_width}:start_y=0:duration={frame_duration}:end_x=0:end_y=0"
-            )
-            
+            # 5. 使用concat协议合并所有视频片段
             create_video_cmd = [
                 'ffmpeg', '-f', 'concat', '-safe', '0', '-i', concat_file,
-                '-vf', transition_filter,
                 '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', 
                 '-pix_fmt', 'yuv420p', '-r', str(self.fps), '-y', output_path
             ]
             
             print(f"正在创建视频: {output_path}")
             print(f"视频时长: {self.video_duration}秒, 帧率: {self.fps}fps")
+            print(f"每个图片以翻转方式依次进入，顺序为从左到右，从上到下")
             
             subprocess.run(create_video_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             print(f"成功创建视频: {output_path}")
@@ -379,6 +448,18 @@ class ImageGridCreator:
         Returns:
             bool: 是否成功创建
         """
+        return self.create_simple_flip_video(image_files, output_path)
+    
+    def create_simple_flip_video(self, image_files: List[str], output_path: str) -> bool:
+        """为图片创建简化的翻转效果视频
+        
+        Args:
+            image_files: 图片文件列表
+            output_path: 输出文件路径
+        
+        Returns:
+            bool: 是否成功创建
+        """
         try:
             # 1. 创建一个大的网格图片（使用我们已经优化过的PIL方法）
             grid_image_path = os.path.join(self.temp_dir, 'grid_image.jpg')
@@ -386,23 +467,128 @@ class ImageGridCreator:
                 print("创建网格图片失败，无法继续创建视频")
                 return False
             
-            # 2. 使用这个网格图片创建一个简单的视频
-            # 添加一些简单的效果，如淡入淡出或轻微缩放
+            # 2. 使用这个网格图片创建一个带有动态效果的视频
+            # 采用更简单的方法实现逐个翻转进入效果
+            rows, cols = self.calculate_grid_size(len(image_files))
+            num_images = len(image_files)
+            
+            # 创建视频脚本文件
+            concat_file = os.path.join(self.temp_dir, 'simple_flip_concat.txt')
+            temp_files = []  # 用于跟踪临时文件
+            
+            with open(concat_file, 'w') as f:
+                # 初始背景帧
+                f.write(f"file '{os.path.abspath(grid_image_path)}'\n")
+                f.write(f"duration 0.1\n")
+                
+                # 计算每个翻转效果的持续时间
+                transition_duration = max(0.2, self.video_duration / (num_images + 2))  # 留一些时间给开头和结尾
+                
+                # 创建一个临时目录存储中间视频片段
+                temp_frames_dir = os.path.join(self.temp_dir, 'temp_frames')
+                os.makedirs(temp_frames_dir, exist_ok=True)
+                
+                # 为每个图片创建一个简单的翻转效果
+                for i in range(num_images):
+                    # 计算图片在网格中的位置
+                    row = i // cols
+                    col = i % cols
+                    cell_w = self.max_width // cols
+                    cell_h = self.max_height // rows
+                    x_pos = col * cell_w
+                    y_pos = row * cell_h
+                    
+                    # 创建临时视频文件
+                    temp_video = os.path.join(temp_frames_dir, f'simple_flip_{i}.mp4')
+                    temp_files.append(temp_video)
+                    
+                    # 创建一个简单的翻转动画：从左侧翻转进入
+                    # 使用更简单的FFmpeg滤镜链，避免复杂操作
+                    flip_cmd = [
+                        'ffmpeg', '-loop', '1', '-i', grid_image_path,
+                        '-vf', (
+                            # 创建一个从左到右的翻转动画
+                            # 先创建一个基础层，只显示背景
+                            f'color=c=black:s={self.max_width}x{self.max_height}[bg];'
+                            # 裁剪出当前图片的位置
+                            f'crop=w={cell_w}:h={cell_h}:x={x_pos}:y={y_pos},'
+                            # 添加简单的翻转动画效果
+                            f'hflip,tween=in=0:out={self.fps*transition_duration}:type=quadratic,ease=in,scale=0:ih[flip_left];'
+                            # 再裁剪原图片位置
+                            f'crop=w={cell_w}:h={cell_h}:x={x_pos}:y={y_pos}[crop_center];'
+                            # 混合翻转动画和原图
+                            f'[flip_left][crop_center]blend=all_expr=blend(1-t/{transition_duration}, A, B)[animated];'
+                            # 将动画放置到正确的位置
+                            f'[bg][animated]overlay=x={x_pos}:y={y_pos}[out];'
+                            # 控制时间
+                            f'[out]trim=duration={transition_duration},setpts=PTS-STARTPTS'
+                        ),
+                        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25', 
+                        '-pix_fmt', 'yuv420p', '-r', str(self.fps), '-y', temp_video
+                    ]
+                    
+                    # 执行命令创建临时视频，添加错误处理
+                    try:
+                        subprocess.run(flip_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        # 添加到concat文件
+                        f.write(f"file '{os.path.abspath(temp_video)}'\n")
+                    except Exception as e:
+                        print(f"创建图片 {i+1} 的简化翻转动画失败，跳过: {str(e)}")
+                        # 如果失败，添加一个短暂的空白帧
+                        blank_video = os.path.join(temp_frames_dir, f'blank_{i}.mp4')
+                        temp_files.append(blank_video)
+                        
+                        # 创建空白视频
+                        blank_cmd = [
+                            'ffmpeg', '-f', 'lavfi', '-i', f'color=c=black:s={self.max_width}x{self.max_height}:r={self.fps}',
+                            '-t', str(0.1), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25',
+                            '-pix_fmt', 'yuv420p', '-y', blank_video
+                        ]
+                        subprocess.run(blank_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        f.write(f"file '{os.path.abspath(blank_video)}'\n")
+                        continue
+                
+                # 添加最后的静止画面，确保总时长
+                # 计算总使用时间
+                total_used_time = 0.1 + (num_images * transition_duration)
+                remaining_time = max(0, self.video_duration - total_used_time)
+                
+                if remaining_time > 0:
+                    # 创建一个静止画面视频
+                    static_video = os.path.join(temp_frames_dir, 'final_static.mp4')
+                    temp_files.append(static_video)
+                    
+                    static_cmd = [
+                        'ffmpeg', '-loop', '1', '-i', grid_image_path,
+                        '-t', str(remaining_time), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25',
+                        '-pix_fmt', 'yuv420p', '-r', str(self.fps), '-y', static_video
+                    ]
+                    subprocess.run(static_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    f.write(f"file '{os.path.abspath(static_video)}'\n")
+            
+            # 合并所有视频片段
             create_video_cmd = [
-                'ffmpeg', '-loop', '1', '-i', grid_image_path,
-                '-vf', f"fade=in:st=0:d=1,fade=out:st={self.video_duration-1}:d=1,scale={self.max_width}:{self.max_height}",
+                'ffmpeg', '-f', 'concat', '-safe', '0', '-i', concat_file,
                 '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', 
-                '-pix_fmt', 'yuv420p', '-t', str(self.video_duration), '-r', str(self.fps), '-y', output_path
+                '-pix_fmt', 'yuv420p', '-r', str(self.fps), '-y', output_path
             ]
             
             print(f"正在创建简化视频: {output_path}")
             print(f"视频时长: {self.video_duration}秒, 帧率: {self.fps}fps")
+            print(f"使用分阶段处理实现图片逐个翻转显示效果")
             
             subprocess.run(create_video_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             print(f"成功创建简化视频: {output_path}")
             return True
         except Exception as e:
             print(f"创建简化视频失败: {str(e)}")
+            # 尝试打印详细的错误输出以帮助调试
+            if hasattr(e, 'stderr'):
+                try:
+                    stderr_output = e.stderr.decode('utf-8')
+                    print(f"FFmpeg错误输出: {stderr_output[:500]}...")
+                except:
+                    pass
             return False
 
     def process_directory(self, dir_path: str) -> bool:
