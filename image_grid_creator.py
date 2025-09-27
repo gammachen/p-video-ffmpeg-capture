@@ -367,20 +367,21 @@ class ImageGridCreator:
                         # 初始为纯黑背景
                         shutil.copy2(background_path, prev_bg)
                     
-                    # 为当前图片创建翻转进入效果（使用更简单的翻转动画）
+                    # 为当前图片创建翻转进入效果（使用更高效的动画实现）
                     flip_cmd = [
                         'ffmpeg', '-loop', '1', '-i', prev_bg,
                         '-loop', '1', '-i', processed_img,
                         '-vf', (
-                            # 使用简单的水平翻转和缩放动画实现翻转效果
-                            f'[1:v]format=rgba,pad=iw+10:ih+10:(ow-iw)/2:(oh-ih)/2:color=black@0,trim=duration={transition_duration},setpts=PTS-STARTPTS,'
-                            # 简单的缩放和水平翻转动画
-                            f'scale=iw*t/{transition_duration}:ih,format=yuv420p[scaled];'
-                            f'[scaled]fade=in:st=0:d={transition_duration/2}[img_flip];'
-                            f'[0:v][img_flip]overlay=x={x_pos}:y={y_pos}:shortest=1[out];'
+                            # 使用更高效的翻转动画实现，避免复杂的时间函数计算
+                            f'[1:v]format=rgba,pad=iw+10:ih+10:(ow-iw)/2:(oh-ih)/2:color=black@0[img_padded];'
+                            # 使用更简单的淡入和位移动画替代缩放动画，减少计算复杂度
+                            f'[img_padded]fade=in:st=0:d={transition_duration},trim=duration={transition_duration},setpts=PTS-STARTPTS[img_flip];'
+                            # 添加轻微的位移动画，模拟从左侧滑入效果
+                            f'[img_flip]translate=w*(({transition_duration}-t)/{transition_duration}):0[img_translated];'
+                            f'[0:v][img_translated]overlay=x={x_pos}:y={y_pos}:shortest=1[out];'
                             f'[out]split[out1][out2]'
                         ),
-                        '-map', '[out1]', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-pix_fmt', 'yuv420p', 
+                        '-map', '[out1]', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25', '-pix_fmt', 'yuv420p', 
                         '-r', str(self.fps), '-y', temp_video,
                         '-map', '[out2]', '-frames:v', '1', '-q:v', '2', current_bg
                     ]
@@ -503,27 +504,23 @@ class ImageGridCreator:
                     temp_files.append(temp_video)
                     
                     # 创建一个简单的翻转动画：从左侧翻转进入
-                    # 使用更简单的FFmpeg滤镜链，避免复杂操作
+                    # 使用更高效的FFmpeg滤镜链，减少资源消耗
                     flip_cmd = [
                         'ffmpeg', '-loop', '1', '-i', grid_image_path,
                         '-vf', (
-                            # 创建一个从左到右的翻转动画
+                            # 创建一个从左到右的淡入和位移动画
                             # 先创建一个基础层，只显示背景
                             f'color=c=black:s={self.max_width}x{self.max_height}[bg];'
                             # 裁剪出当前图片的位置
-                            f'crop=w={cell_w}:h={cell_h}:x={x_pos}:y={y_pos},'
-                            # 添加简单的翻转动画效果
-                            f'hflip,tween=in=0:out={self.fps*transition_duration}:type=quadratic,ease=in,scale=0:ih[flip_left];'
-                            # 再裁剪原图片位置
-                            f'crop=w={cell_w}:h={cell_h}:x={x_pos}:y={y_pos}[crop_center];'
-                            # 混合翻转动画和原图
-                            f'[flip_left][crop_center]blend=all_expr=blend(1-t/{transition_duration}, A, B)[animated];'
+                            f'crop=w={cell_w}:h={cell_h}:x={x_pos}:y={y_pos}[img_cropped];'
+                            # 添加简单的淡入和位移动画替代复杂的翻转效果
+                            # 使用位移和淡入效果模拟翻转进入
+                            f'[img_cropped]fade=in:st=0:d={transition_duration},translate=w*(({transition_duration}-t)/{transition_duration}):0,'
+                            f'trim=duration={transition_duration},setpts=PTS-STARTPTS[animated];'
                             # 将动画放置到正确的位置
-                            f'[bg][animated]overlay=x={x_pos}:y={y_pos}[out];'
-                            # 控制时间
-                            f'[out]trim=duration={transition_duration},setpts=PTS-STARTPTS'
+                            f'[bg][animated]overlay=x={x_pos}:y={y_pos}[out]'
                         ),
-                        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25', 
+                        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', 
                         '-pix_fmt', 'yuv420p', '-r', str(self.fps), '-y', temp_video
                     ]
                     
