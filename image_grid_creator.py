@@ -2,6 +2,12 @@
 # -*- coding: utf-8 -*-
 """图片网格合并工具
 
+python image_grid_creator.py -d 视频制作解决方案/captured -o output-join-images.jpg
+使用 5x5 的网格布局合并 25 张图片
+使用PIL库创建网格图片...
+成功创建网格图片: output-join-images.jpg
+任务完成！输出文件已保存至: output-join-images.jpg
+
 此工具支持两种模式：
 1. 目录模式：将指定目录下的所有图片合并为网格图片
 2. 多图片模式：将指定的多张图片合并为网格图片

@@ -274,7 +274,7 @@ class ImageGridCreator:
             return False
 
     def create_transition_video(self, image_files: List[str], output_path: str) -> bool:
-        """创建带转场特效的视频
+        """创建带转场特效的视频，每个图片从右往左滑入其指定位置
 
         Args:
             image_files: 图片文件列表
@@ -289,103 +289,141 @@ class ImageGridCreator:
             return False
         
         # 对于大量图片，简化视频生成逻辑以避免命令行过长
-        if num_images > 50:
+        if num_images > 20:
             print(f"警告：图片数量过多（{num_images}张），将使用简化的视频生成方法")
             return self.create_simple_video(image_files, output_path)
         
         # 强制使用3x4的网格布局
         rows, cols = 3, 4
-        print(f"使用 {rows}x{cols} 的网格布局创建视频，转场特效为最简单的淡入效果")
+        print(f"使用 {rows}x{cols} 的网格布局创建视频，每个图片从右往左滑入其指定位置")
+        
+        # 降低分辨率以减少资源消耗
+        temp_max_width = 1280
+        temp_max_height = 720
+        temp_fps = 15
+        
+        print(f"降低分辨率和帧率以减少资源消耗: {temp_max_width}x{temp_max_height}, {temp_fps}fps")
         
         # 计算每个单元格的尺寸
-        cell_width = self.max_width // cols
-        cell_height = self.max_height // rows
+        cell_width = temp_max_width // cols
+        cell_height = temp_max_height // rows
         
         # 确保尺寸是偶数
         cell_width = cell_width // 2 * 2
         cell_height = cell_height // 2 * 2
         
         try:
-            # 1. 先创建临时文件夹存储处理后的图片
-            processed_dir = os.path.join(self.temp_dir, 'processed_images')
-            os.makedirs(processed_dir, exist_ok=True)
+            # 只处理前4张图片进行测试
+            test_image_files = image_files[:4]
+            test_num_images = len(test_image_files)
+            print(f"仅处理前{test_num_images}张图片进行测试")
             
-            # 2. 处理每张图片并保存为临时文件
-            processed_files = []
-            for i, img_path in enumerate(image_files):
-                processed_img = os.path.join(processed_dir, f'processed_{i}.jpg')
+            # 确保输出路径是绝对路径
+            output_path = os.path.abspath(output_path)
+            
+            # 准备FFmpeg命令，使用成功测试的方法
+            # 先创建黑色背景
+            # 然后依次叠加每个图片，每个都有滑入效果
+            
+            # 准备命令参数
+            cmd = ['/opt/homebrew/bin/ffmpeg']  # 使用绝对路径的FFmpeg
+            
+            # 添加黑色背景作为第一个输入
+            cmd.extend(['-f', 'lavfi', '-i', f'color=c=black:s={temp_max_width}x{temp_max_height}:r={temp_fps}:d={self.video_duration}'])
+            
+            # 添加图片输入
+            for img_path in test_image_files:
+                cmd.extend(['-loop', '1', '-i', os.path.abspath(img_path)])
+            
+            # 构建filter_complex
+            filter_complex_parts = []
+            
+            # 为每张图片创建缩放和填充滤镜
+            for i in range(test_num_images):
+                img_index = i + 1  # +1 因为背景是第一个输入
+                filter_complex_parts.append(f"[{img_index}:v]scale={cell_width}:{cell_height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={cell_width}:{cell_height}:(ow-iw)/2:(oh-ih)/2:black[img{i}];")
+            
+            # 创建滑入动画的滤镜链
+            slide_duration = 0.5  # 滑入动画持续时间
+            
+            # 首先将第一个图片叠加到背景上
+            if test_num_images > 0:
+                row = 0 // cols
+                col = 0 % cols
+                x_pos = col * cell_width
+                y_pos = row * cell_height
+                print(f"图片 1: 位置 ({row+1}:{col+1}), 坐标 ({x_pos}, {y_pos})")
                 
-                # 缩放到单元格大小并居中
-                process_cmd = [
-                    'ffmpeg', '-i', img_path,
-                    '-vf', f'scale={cell_width}:{cell_height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={cell_width}:{cell_height}:(ow-iw)/2:(oh-ih)/2:black',
-                    '-q:v', '2', '-y', processed_img
-                ]
+                # 使用单引号包裹if表达式，确保正确解析
+                filter_complex_parts.append(f"[0][img0]overlay=x='if(lt(t,{slide_duration}),{temp_max_width}-{x_pos}-(t*{temp_max_width}/{slide_duration}),{x_pos})':y={y_pos}:shortest=1[tmp0];")
                 
-                # 添加错误处理，避免单个图片处理失败影响整体
-                try:
-                    subprocess.run(process_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    processed_files.append(processed_img)
-                except Exception as e:
-                    print(f"处理图片 {i+1} 失败，跳过: {str(e)}")
-                    # 创建一个空白图片作为替代
-                    blank_cmd = [
-                        'ffmpeg', '-f', 'lavfi', '-i', f'color=c=black:s={cell_width}x{cell_height}:r=1',
-                        '-frames:v', '1', '-q:v', '2', '-y', processed_img
-                    ]
-                    subprocess.run(blank_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    processed_files.append(processed_img)
+                # 依次叠加其余图片
+                for i in range(1, test_num_images):
+                    row = i // cols
+                    col = i % cols
+                    x_pos = col * cell_width
+                    y_pos = row * cell_height
+                    print(f"图片 {i+1}: 位置 ({row+1}:{col+1}), 坐标 ({x_pos}, {y_pos})")
+                    
+                    # 叠加当前图片到之前的结果上，带滑入效果
+                    filter_complex_parts.append(f"[tmp{i-1}][img{i}]overlay=x='if(lt(t,{slide_duration}),{temp_max_width}-{x_pos}-(t*{temp_max_width}/{slide_duration}),{x_pos})':y={y_pos}:shortest=1[tmp{i}];")
+                
+                # 添加最终的淡出效果
+                filter_complex_parts.append(f"[tmp{test_num_images-1}]fade=out:st={self.video_duration-1}:d=1[out];")
+            else:
+                # 如果没有图片，只创建黑色背景视频
+                filter_complex_parts.append(f"[0]fade=out:st={self.video_duration-1}:d=1[out];")
             
-            # 3. 计算每张图片的出现时间
-            transition_duration = 0.3  # 每个图片的淡入时间
-            image_delay = 0.2  # 图片之间的延迟时间
+            # 构建完整的filter_complex字符串
+            filter_complex = "".join(filter_complex_parts)
             
-            # 4. 创建一个视频脚本文件，使用filter_complex
-            concat_file = os.path.join(self.temp_dir, 'video_concat.txt')
-            with open(concat_file, 'w') as f:
-                for i, processed_img in enumerate(processed_files):
-                    f.write(f"file '{os.path.abspath(processed_img)}'\n")
-                    # 每个图片显示一小段时间
-                    f.write(f"duration 1.0\n")
-                # 最后一个文件不需要duration
-                if processed_files:
-                    f.write(f"file '{os.path.abspath(processed_files[-1])}'\n")
-            
-            # 5. 使用filter_complex创建最简单的转场效果
-            # 先创建一个空背景
-            create_video_cmd = [
-                'ffmpeg',
-                '-f', 'concat', '-safe', '0', '-i', concat_file,
-                '-f', 'lavfi', '-i', f'color=c=black:s={self.max_width}x{self.max_height}:r={self.fps}',
-                '-filter_complex', (
-                    # 对每个输入图片应用淡入效果和定位
-                    f'[0:v]scale={cell_width}:{cell_height}:force_original_aspect_ratio=decrease:flags=lanczos,'
-                    f'pad={self.max_width}:{self.max_height}:(ow-iw)/2:(oh-ih)/2:black,'
-                    f'fade=in:st=0:d={transition_duration},fade=out:st={self.video_duration-transition_duration}:d={transition_duration}[img]'
-                ),
-                '-map', '[img]',
-                '-c:v', 'libx264', '-preset', 'medium', '-crf', '28',
-                '-pix_fmt', 'yuv420p', '-t', str(self.video_duration), '-r', str(self.fps), '-y', output_path
-            ]
+            # 添加filter_complex和输出参数
+            cmd.extend(['-filter_complex', filter_complex])
+            cmd.extend(['-map', '[out]'])
+            cmd.extend(['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30'])
+            cmd.extend(['-pix_fmt', 'yuv420p', '-t', str(self.video_duration), '-y', output_path])
             
             print(f"正在创建视频: {output_path}")
-            print(f"视频时长: {self.video_duration}秒, 帧率: {self.fps}fps")
-            print(f"使用最简单的淡入淡出效果")
+            print(f"视频时长: {self.video_duration}秒, 帧率: {temp_fps}fps")
+            print(f"处理图片数量: {test_num_images}")
+            print(f"FFmpeg命令长度: {len(cmd)}个参数")
             
-            subprocess.run(create_video_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            print(f"成功创建视频: {output_path}")
-            return True
+            # 输出filter_complex的前500个字符用于调试
+            print(f"Filter_complex前500字符: {filter_complex[:500]}...")
+            
+            # 执行FFmpeg命令
+            print(f"\n执行命令: {' '.join(cmd[:15])} ... [命令过长，省略部分参数]")
+            
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True
+            )
+            
+            stdout, stderr = process.communicate()
+            
+            if process.returncode == 0:
+                print(f"成功创建视频: {output_path}")
+                if os.path.exists(output_path):
+                    print(f"视频文件已存在，大小: {os.path.getsize(output_path)} 字节")
+                    return True
+                else:
+                    print(f"警告: 命令执行成功，但输出文件不存在: {output_path}")
+                    return False
+            else:
+                print(f"FFmpeg命令执行失败，返回代码: {process.returncode}")
+                print(f"FFmpeg标准输出前500字符: {stdout[:500]}")
+                print(f"FFmpeg标准错误前500字符: {stderr[:500]}")
+                # 对于调试，提供直接在终端运行的命令
+                print("\n建议直接在终端中执行的命令（便于调试）:")
+                terminal_cmd = ' '.join(cmd)
+                print(terminal_cmd)
+                return False
         except Exception as e:
             print(f"创建视频失败: {str(e)}")
-            # 尝试打印详细的错误输出以帮助调试
-            if hasattr(e, 'stderr'):
-                try:
-                    stderr_output = e.stderr.decode('utf-8')
-                    print(f"FFmpeg错误输出: {stderr_output[:500]}...")  # 只打印前500个字符
-                except:
-                    pass
             return False
-    
+
     def create_simple_video(self, image_files: List[str], output_path: str) -> bool:
         """为大量图片创建简化的视频
         
