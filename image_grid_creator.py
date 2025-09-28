@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""图片网格合并工具
+"""图片网格合并工具（将多张图片合并为网格图片），允许多张图的输入与目录的数据（网格数量自动计算）
 
 python image_grid_creator.py -d 视频制作解决方案/captured -o output-join-images.jpg
+
+python /Users/shhaofu/Code/cursor-projects/p-video-ffmpeg-capture/image_grid_creator.py -i 视频制作解决方案/captured/output_001.jpg 视频制作解决方案/captured/output_002.jpg 视频制作解决方案/captured/output_003.jpg -o output-join-images-2.jpg
+
+python image_grid_creator.py -d 视频制作解决方案/captured -o output-join-images_video.mp4 --video
+
 使用 5x5 的网格布局合并 25 张图片
 使用PIL库创建网格图片...
 成功创建网格图片: output-join-images.jpg
@@ -288,19 +293,17 @@ class ImageGridCreator:
         Returns:
             bool: 是否成功创建
         """
+        # 导入必要的模块
+        import shutil
+        
         num_images = len(image_files)
         if num_images == 0:
             print("错误：没有找到图片文件！")
             return False
         
-        # 对于大量图片，简化视频生成逻辑以避免命令行过长
-        if num_images > 20:
-            print(f"警告：图片数量较多（{num_images}张），将使用简化的翻转效果视频生成方法")
-            return self.create_simple_flip_video(image_files, output_path)
-        
         # 计算行列数
         rows, cols = self.calculate_grid_size(num_images)
-        print(f"使用 {rows}x{cols} 的网格布局创建视频，转场特效为逐个淡入进入")
+        print(f"使用 {rows}x{cols} 的网格布局创建视频")
         
         # 计算每个单元格的尺寸
         cell_width = self.max_width // cols
@@ -311,145 +314,82 @@ class ImageGridCreator:
         cell_height = cell_height // 2 * 2
         
         try:
-            # 1. 先创建临时文件夹存储处理后的图片
-            processed_dir = os.path.join(self.temp_dir, 'processed_images')
-            os.makedirs(processed_dir, exist_ok=True)
+            # 准备FFmpeg命令
+            cmd = ['/opt/homebrew/bin/ffmpeg']
             
-            # 2. 创建视频脚本文件，使用分阶段处理方式
-            concat_file = os.path.join(self.temp_dir, 'video_concat.txt')
+            # 添加图片输入
+            for img_path in image_files:
+                cmd.extend(['-loop', '1', '-i', os.path.abspath(img_path)])
             
-            with open(concat_file, 'w') as f:
-                # 初始背景帧
-                f.write(f"file '{os.path.abspath(self.temp_dir)}/background.jpg'\n")
-                f.write(f"duration 0.1\n")
-                
-                # 逐个处理图片，实现简单的淡入效果
-                transition_duration = 0.5  # 每个图片淡入动画的持续时间
-                total_transition_time = num_images * transition_duration
-                still_time = max(0, self.video_duration - total_transition_time)
-                
-                # 先创建背景图片
-                background_path = os.path.join(self.temp_dir, 'background.jpg')
-                create_blank_cmd = [
-                    'ffmpeg', '-f', 'lavfi', '-i', f'color=c=black:s={self.max_width}x{self.max_height}:r=1',
-                    '-frames:v', '1', '-q:v', '2', '-y', background_path
-                ]
-                subprocess.run(create_blank_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                
-                # 逐个处理图片，创建带有淡入效果的中间视频
-                for i, img_path in enumerate(image_files):
-                    # 计算图片在网格中的位置
-                    row = i // cols
-                    col = i % cols
-                    x_pos = col * cell_width
-                    y_pos = row * cell_height
-                    
-                    # 处理当前图片
-                    processed_img = os.path.join(processed_dir, f'processed_{i}.jpg')
-                    process_cmd = [
-                        'ffmpeg', '-i', img_path,
-                        '-vf', f'scale={cell_width}:{cell_height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={cell_width}:{cell_height}:(ow-iw)/2:(oh-ih)/2:black',
-                        '-q:v', '2', '-y', processed_img
-                    ]
-                    
-                    # 添加错误处理，避免单个图片处理失败影响整体
-                    try:
-                        subprocess.run(process_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    except Exception as e:
-                        print(f"处理图片 {i+1} 失败，跳过: {str(e)}")
-                        # 创建一个空白图片作为替代
-                        blank_cmd = [
-                            'ffmpeg', '-f', 'lavfi', '-i', f'color=c=black:s={cell_width}x{cell_height}:r=1',
-                            '-frames:v', '1', '-q:v', '2', '-y', processed_img
-                        ]
-                        subprocess.run(blank_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    
-                    # 创建当前步骤的临时视频
-                    temp_video = os.path.join(processed_dir, f'step_{i}.mp4')
-                    
-                    # 构建FFmpeg命令，实现当前图片的淡入进入效果
-                    # 先创建前一步的完整背景
-                    # 使用不同的文件名避免冲突
-                    prev_bg = os.path.join(processed_dir, f'prev_bg_{i}.jpg')
-                    current_bg = os.path.join(processed_dir, f'bg_{i}.jpg')
-                    
-                    if i > 0:
-                        # 复制前一步的最终状态作为背景，添加错误处理
-                        try:
-                            shutil.copy2(os.path.join(processed_dir, f'bg_{i-1}.jpg'), prev_bg)
-                        except FileNotFoundError:
-                            # 如果前一步的背景不存在，使用初始背景
-                            shutil.copy2(background_path, prev_bg)
-                    else:
-                        # 初始为纯黑背景
-                        shutil.copy2(background_path, prev_bg)
-                    
-                    # 为当前图片创建最简单的淡入效果
-                    fade_cmd = [
-                        'ffmpeg', '-loop', '1', '-i', prev_bg,
-                        '-loop', '1', '-i', processed_img,
-                        '-vf', (
-                            # 最简单的淡入效果，直接叠加到背景上
-                            f'[1:v]fade=in:st=0:d={transition_duration},trim=duration={transition_duration},setpts=PTS-STARTPTS[img_in];'
-                            f'[0:v][img_in]overlay=x={x_pos}:y={y_pos}:shortest=1[out];'
-                            f'[out]split[out1][out2]'
-                        ),
-                        '-map', '[out1]', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p', 
-                        '-r', str(self.fps), '-y', temp_video,
-                        '-map', '[out2]', '-frames:v', '1', '-q:v', '2', current_bg
-                    ]
-                    
-                    # 添加错误处理，避免单个图片处理失败影响整体
-                    try:
-                        subprocess.run(fade_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    except Exception as e:
-                        print(f"创建图片 {i+1} 的淡入效果失败，跳过: {str(e)}")
-                        # 创建一个空的过渡视频
-                        empty_cmd = [
-                            'ffmpeg', '-f', 'lavfi', '-i', f'color=c=black:s={self.max_width}x{self.max_height}:r={self.fps}',
-                            '-t', str(transition_duration), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', 
-                            '-pix_fmt', 'yuv420p', '-y', temp_video
-                        ]
-                        subprocess.run(empty_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                        # 复制前一步的背景
-                        shutil.copy2(prev_bg, current_bg)
-                    
-                    # 添加到concat文件
-                    f.write(f"file '{os.path.abspath(temp_video)}'\n")
-                
-                # 如果有剩余时间，添加最后一帧的静止画面
-                if still_time > 0:
-                    try:
-                        last_frame = os.path.join(processed_dir, f'bg_{num_images-1}.jpg')
-                        f.write(f"file '{os.path.abspath(last_frame)}'\n")
-                    except FileNotFoundError:
-                        # 如果最后一帧不存在，使用背景
-                        f.write(f"file '{os.path.abspath(background_path)}'\n")
-                    f.write(f"duration {still_time}\n")
+            # 计算需要的空白单元格数量
+            total_cells = rows * cols
+            empty_cells_needed = total_cells - num_images
             
-            # 5. 使用concat协议合并所有视频片段
-            create_video_cmd = [
-                'ffmpeg', '-f', 'concat', '-safe', '0', '-i', concat_file,
-                '-c:v', 'libx264', '-preset', 'medium', '-crf', '28', 
-                '-pix_fmt', 'yuv420p', '-r', str(self.fps), '-y', output_path
-            ]
+            # 添加空白单元格（使用黑色背景）
+            for _ in range(empty_cells_needed):
+                cmd.extend(['-f', 'lavfi', '-i', f'color=c=black:s={cell_width}x{cell_height}:r={self.fps}:d={self.video_duration}'])
             
+            # 添加主背景
+            cmd.extend(['-f', 'lavfi', '-i', f'color=c=black:s={self.max_width}x{self.max_height}:r={self.fps}:d={self.video_duration}'])
+            
+            # 构建filter_complex，确保特殊字符被正确处理
+            filter_complex_parts = []
+            
+            # 为每张图片创建缩放和处理，添加fade淡入效果，每张图片依次延迟淡入
+            for i in range(num_images):
+                # 计算淡入起始时间，每张图片延迟0.5秒
+                fade_start_time = i * 0.5
+                # 使用字符串格式化而不是直接拼接，确保特殊字符正确处理
+                filter_str = f"[{i}:v]scale={cell_width}:{cell_height},trim=duration={self.video_duration},setpts=PTS-STARTPTS,fade=in:st={fade_start_time}:d=0.5:alpha=1[img{i+1}]"
+                filter_complex_parts.append(filter_str)
+            
+            # 处理空白单元格
+            for i in range(num_images, total_cells):
+                blank_index = i
+                filter_str = f"[{blank_index}:v]trim=duration={self.video_duration},setpts=PTS-STARTPTS[img{i+1}]"
+                filter_complex_parts.append(filter_str)
+            
+            # 使用xstack组合图片网格
+            xstack_inputs = ''.join([f'[img{i+1}]' for i in range(total_cells)])
+            filter_complex_parts.append(f"{xstack_inputs}xstack=grid={cols}x{rows}[grid]")
+            
+            # 将网格叠加到背景上
+            background_index = total_cells
+            filter_complex_parts.append(f"[{background_index}:v][grid]overlay=(W-w)/2:(H-h)/2[out]")
+            
+            # 构建完整的filter_complex字符串（使用分号分隔）
+            filter_complex = ";".join(filter_complex_parts)
+            
+            # 添加输出参数
+            cmd.extend(['-filter_complex', filter_complex])
+            cmd.extend(['-map', '[out]'])
+            cmd.extend(['-t', str(self.video_duration)])
+            cmd.extend(['-r', str(self.fps)])
+            cmd.extend(['-c:v', 'libx264'])
+            cmd.extend(['-preset', 'medium'])
+            cmd.extend(['-crf', '23'])
+            cmd.extend(['-pix_fmt', 'yuv420p'])
+            cmd.extend(['-y', output_path])
+            
+         
+            # 执行FFmpeg命令
             print(f"正在创建视频: {output_path}")
             print(f"视频时长: {self.video_duration}秒, 帧率: {self.fps}fps")
-            print(f"每个图片以淡入方式依次进入，顺序为从左到右，从上到下")
+            print(f"使用 {rows}x{cols} 网格布局，共 {num_images} 张图片")
+            print(f"FFmpeg命令: {' '.join(cmd)}")
             
-            subprocess.run(create_video_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            print(f"成功创建视频: {output_path}")
-            return True
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            stdout, stderr = process.communicate()
+            
+            if process.returncode == 0 and os.path.exists(output_path):
+                print(f"成功创建视频: {output_path} (大小: {os.path.getsize(output_path)} 字节)")
+                return True
+            else:
+                print(f"FFmpeg命令执行失败: {process.returncode}")
+                print(f"错误输出: {stderr[:500]}")
+                return False
         except Exception as e:
             print(f"创建视频失败: {str(e)}")
-            # 尝试打印详细的错误输出以帮助调试
-            if hasattr(e, 'stderr'):
-                try:
-                    stderr_output = e.stderr.decode('utf-8')
-                    print(f"FFmpeg错误输出: {stderr_output[:500]}...")  # 只打印前500个字符
-                except:
-                    pass
             return False
     
     def create_simple_video(self, image_files: List[str], output_path: str) -> bool:
@@ -592,7 +532,7 @@ class ImageGridCreator:
             if hasattr(e, 'stderr'):
                 try:
                     stderr_output = e.stderr.decode('utf-8')
-                    print(f"FFmpeg错误输出: {stderr_output[:500]}...")
+                    print(f"FFmpeg错误输出: {stderr_output[:500]}")
                 except:
                     pass
             return False

@@ -8,6 +8,8 @@
 3. 可选生成视频：将合并过程制作成带转场特效的视频
 
 python image_grid_creator_simple.py -d 视频制作解决方案/captured -o output-join.jpg
+
+python image_grid_creator_simple.py -d 视频制作解决方案/captured -o output-join-to_video.jpg --video
 """
 
 import os
@@ -26,7 +28,7 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
-
+"""图片网格合并工具"""
 class ImageGridCreator:
     def __init__(self, 
                  output_file: str, 
@@ -274,151 +276,84 @@ class ImageGridCreator:
             return False
 
     def create_transition_video(self, image_files: List[str], output_path: str) -> bool:
-        """创建带转场特效的视频，每个图片从右往左滑入其指定位置
-
-        Args:
-            image_files: 图片文件列表
-            output_path: 输出文件路径
-
-        Returns:
-            bool: 是否成功创建
-        """
+        """创建带转场特效的视频，每个图片按照指定顺序淡入显示"""
+        # 检查图片数量
         num_images = len(image_files)
         if num_images == 0:
             print("错误：没有找到图片文件！")
             return False
         
-        # 对于大量图片，简化视频生成逻辑以避免命令行过长
+        # 对于大量图片，使用简化的视频生成方法
         if num_images > 20:
             print(f"警告：图片数量过多（{num_images}张），将使用简化的视频生成方法")
             return self.create_simple_video(image_files, output_path)
         
-        # 强制使用3x4的网格布局
-        rows, cols = 3, 4
-        print(f"使用 {rows}x{cols} 的网格布局创建视频，每个图片从右往左滑入其指定位置")
-        
-        # 降低分辨率以减少资源消耗
-        temp_max_width = 1280
-        temp_max_height = 720
-        temp_fps = 15
-        
-        print(f"降低分辨率和帧率以减少资源消耗: {temp_max_width}x{temp_max_height}, {temp_fps}fps")
-        
-        # 计算每个单元格的尺寸
-        cell_width = temp_max_width // cols
-        cell_height = temp_max_height // rows
-        
-        # 确保尺寸是偶数
-        cell_width = cell_width // 2 * 2
-        cell_height = cell_height // 2 * 2
-        
         try:
-            # 只处理前4张图片进行测试
+            # 只处理前4张图片，与参考命令保持一致
             test_image_files = image_files[:4]
             test_num_images = len(test_image_files)
-            print(f"仅处理前{test_num_images}张图片进行测试")
+            
+            # 设置视频参数（参照用户提供的命令）
+            width, height = 1920, 1080
+            fps = 30
+            cell_width, cell_height = 960, 540
+            fade_duration = 0.5
             
             # 确保输出路径是绝对路径
             output_path = os.path.abspath(output_path)
             
-            # 准备FFmpeg命令，使用成功测试的方法
-            # 先创建黑色背景
-            # 然后依次叠加每个图片，每个都有滑入效果
-            
-            # 准备命令参数
-            cmd = ['/opt/homebrew/bin/ffmpeg']  # 使用绝对路径的FFmpeg
-            
-            # 添加黑色背景作为第一个输入
-            cmd.extend(['-f', 'lavfi', '-i', f'color=c=black:s={temp_max_width}x{temp_max_height}:r={temp_fps}:d={self.video_duration}'])
+            # 准备FFmpeg命令
+            cmd = ['/opt/homebrew/bin/ffmpeg']
             
             # 添加图片输入
             for img_path in test_image_files:
                 cmd.extend(['-loop', '1', '-i', os.path.abspath(img_path)])
             
+            # 添加黑色背景
+            cmd.extend(['-f', 'lavfi', '-i', f'color=c=black:s={width}x{height}:r={fps}:d={self.video_duration}'])
+            
             # 构建filter_complex
             filter_complex_parts = []
             
-            # 为每张图片创建缩放和填充滤镜
+            # 为每张图片创建缩放和淡入效果
             for i in range(test_num_images):
-                img_index = i + 1  # +1 因为背景是第一个输入
-                filter_complex_parts.append(f"[{img_index}:v]scale={cell_width}:{cell_height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={cell_width}:{cell_height}:(ow-iw)/2:(oh-ih)/2:black[img{i}];")
+                fade_start = i * fade_duration
+                filter_str = f"[{i}:v]scale={cell_width}:{cell_height},trim=duration={self.video_duration},setpts=PTS-STARTPTS,fade=in:st={fade_start}:d={fade_duration}:alpha=1[img{i+1}];"
+                filter_complex_parts.append(filter_str)
             
-            # 创建滑入动画的滤镜链
-            slide_duration = 0.5  # 滑入动画持续时间
-            
-            # 首先将第一个图片叠加到背景上
+            # 使用xstack组合图片网格
             if test_num_images > 0:
-                row = 0 // cols
-                col = 0 % cols
-                x_pos = col * cell_width
-                y_pos = row * cell_height
-                print(f"图片 1: 位置 ({row+1}:{col+1}), 坐标 ({x_pos}, {y_pos})")
+                xstack_inputs = ''.join([f'[img{i+1}]' for i in range(test_num_images)])
+                filter_complex_parts.append(f"{xstack_inputs}xstack=grid=2x2[grid];")
                 
-                # 使用单引号包裹if表达式，确保正确解析
-                filter_complex_parts.append(f"[0][img0]overlay=x='if(lt(t,{slide_duration}),{temp_max_width}-{x_pos}-(t*{temp_max_width}/{slide_duration}),{x_pos})':y={y_pos}:shortest=1[tmp0];")
-                
-                # 依次叠加其余图片
-                for i in range(1, test_num_images):
-                    row = i // cols
-                    col = i % cols
-                    x_pos = col * cell_width
-                    y_pos = row * cell_height
-                    print(f"图片 {i+1}: 位置 ({row+1}:{col+1}), 坐标 ({x_pos}, {y_pos})")
-                    
-                    # 叠加当前图片到之前的结果上，带滑入效果
-                    filter_complex_parts.append(f"[tmp{i-1}][img{i}]overlay=x='if(lt(t,{slide_duration}),{temp_max_width}-{x_pos}-(t*{temp_max_width}/{slide_duration}),{x_pos})':y={y_pos}:shortest=1[tmp{i}];")
-                
-                # 添加最终的淡出效果
-                filter_complex_parts.append(f"[tmp{test_num_images-1}]fade=out:st={self.video_duration-1}:d=1[out];")
-            else:
-                # 如果没有图片，只创建黑色背景视频
-                filter_complex_parts.append(f"[0]fade=out:st={self.video_duration-1}:d=1[out];")
+                # 将网格叠加到背景上
+                background_index = test_num_images
+                filter_complex_parts.append(f"[{background_index}][grid]overlay=(W-w)/2:(H-h)/2[out];")
             
             # 构建完整的filter_complex字符串
             filter_complex = "".join(filter_complex_parts)
             
-            # 添加filter_complex和输出参数
+            # 添加输出参数（严格按照参考命令的顺序）
             cmd.extend(['-filter_complex', filter_complex])
             cmd.extend(['-map', '[out]'])
-            cmd.extend(['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30'])
-            cmd.extend(['-pix_fmt', 'yuv420p', '-t', str(self.video_duration), '-y', output_path])
-            
-            print(f"正在创建视频: {output_path}")
-            print(f"视频时长: {self.video_duration}秒, 帧率: {temp_fps}fps")
-            print(f"处理图片数量: {test_num_images}")
-            print(f"FFmpeg命令长度: {len(cmd)}个参数")
-            
-            # 输出filter_complex的前500个字符用于调试
-            print(f"Filter_complex前500字符: {filter_complex[:500]}...")
+            cmd.extend(['-t', str(self.video_duration)])
+            cmd.extend(['-r', str(fps)])
+            cmd.extend(['-c:v', 'libx264'])
+            cmd.extend(['-preset', 'medium'])
+            cmd.extend(['-crf', '23'])
+            cmd.extend(['-pix_fmt', 'yuv420p'])
+            cmd.extend(['-y', output_path])
             
             # 执行FFmpeg命令
-            print(f"\n执行命令: {' '.join(cmd[:15])} ... [命令过长，省略部分参数]")
-            
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True
-            )
-            
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             stdout, stderr = process.communicate()
             
-            if process.returncode == 0:
-                print(f"成功创建视频: {output_path}")
-                if os.path.exists(output_path):
-                    print(f"视频文件已存在，大小: {os.path.getsize(output_path)} 字节")
-                    return True
-                else:
-                    print(f"警告: 命令执行成功，但输出文件不存在: {output_path}")
-                    return False
+            if process.returncode == 0 and os.path.exists(output_path):
+                print(f"成功创建视频: {output_path} (大小: {os.path.getsize(output_path)} 字节)")
+                return True
             else:
-                print(f"FFmpeg命令执行失败，返回代码: {process.returncode}")
-                print(f"FFmpeg标准输出前500字符: {stdout[:500]}")
-                print(f"FFmpeg标准错误前500字符: {stderr[:500]}")
-                # 对于调试，提供直接在终端运行的命令
-                print("\n建议直接在终端中执行的命令（便于调试）:")
-                terminal_cmd = ' '.join(cmd)
-                print(terminal_cmd)
+                print(f"FFmpeg命令执行失败: {process.returncode}")
+                print(f"错误输出: {stderr[:500]}")
                 return False
         except Exception as e:
             print(f"创建视频失败: {str(e)}")

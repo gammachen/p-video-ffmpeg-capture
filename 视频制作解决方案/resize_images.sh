@@ -1,6 +1,8 @@
 #!/bin/bash
 # resize_images.sh
 # 调整图片尺寸的脚本，支持参数化输入
+# 将当前目录下匹配模式的图片，并调整尺寸到最大尺寸，并填充黑色背景
+# bash resize_images.sh
 
 # 默认参数
 IMAGE_PATTERN="artistic_portrait_1_*.jpg"
